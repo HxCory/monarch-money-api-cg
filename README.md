@@ -20,8 +20,10 @@ Monarch Money is great, but tracking credit card debt payoff can be tricky. This
 ✅ Credit card account identification and tracking
 ✅ Transaction categorization (purchases vs. payments)
 ✅ Debt payoff progress calculation
+✅ **Cash flow analysis over time** - Track income, total expenses, CC expenses, and cash balance
+✅ **Visualization** - Beautiful plots showing your financial trends
+✅ **Summary statistics** - Average monthly metrics and totals
 ✅ Text-based reporting
-🔄 Monthly trends (coming soon)
 🔄 Payoff projections (coming soon)
 🔄 Export to CSV/Excel (coming soon)
 
@@ -83,7 +85,19 @@ After your first successful login, the `monarchmoney` library will save a sessio
 
 ### Quick Start
 
-Run the example script:
+**Option 1: Try the demo with test data** (no authentication required):
+
+```bash
+python demo_plot.py
+```
+
+This will:
+1. Load realistic dummy data (6 months of transactions)
+2. Calculate cash flow metrics
+3. Generate a visualization showing income, expenses, CC expenses, and cash balance
+4. Save a plot as `cash_flow_demo.png`
+
+**Option 2: Run with your real Monarch Money data**:
 
 ```bash
 python example.py
@@ -141,16 +155,36 @@ monarch-money-api-cg/
 │   ├── __init__.py            # Package initialization
 │   ├── client.py              # Monarch Money API client wrapper
 │   ├── analyzer.py            # Credit card debt analysis logic
+│   ├── visualizer.py          # Visualization and plotting
 │   └── main.py                # Main CLI entry point
 ├── tmp/JS/                    # Original JavaScript implementation (archived)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration
-├── example.py                # Example usage script
+├── example.py                # Example usage script (requires auth)
+├── demo_plot.py              # Demo with test data (no auth required)
+├── test_data.py              # Dummy API response data for testing
 ├── test_basic.py             # Basic tests (no auth required)
 ├── SECURITY.md               # Security guidelines
+├── TEST_RESULTS.md           # Cloud testing results
 ├── claude.md                 # Project planning document
 └── README.md                 # This file
 ```
+
+## Cash Flow Visualization
+
+The tool generates beautiful plots showing your financial trends over time:
+
+![Cash Flow Demo](cash_flow_demo.png)
+
+The plot shows four key metrics:
+- **Income (Green)**: Your total income per period
+- **Total Expenses (Red)**: All your expenses
+- **CC Expenses (Orange)**: Expenses charged to credit cards
+- **Cash Balance (Blue)**: Income minus non-CC expenses
+
+**Cash Balance Formula**: `Income - (Total Expenses - CC Expenses)`
+
+This metric shows how much cash you're keeping after paying for everything that doesn't go on credit cards.
 
 ## Advanced Usage
 
@@ -160,6 +194,7 @@ monarch-money-api-cg/
 import asyncio
 from monarch_budgeting.client import MonarchClient
 from monarch_budgeting.analyzer import CreditCardAnalyzer
+from monarch_budgeting.visualizer import BudgetVisualizer
 from datetime import datetime, timedelta
 
 async def analyze():
@@ -176,14 +211,31 @@ async def analyze():
 
     # Analyze
     analyzer = CreditCardAnalyzer(transactions, accounts)
+
+    # Get credit card summary
     summary = analyzer.get_credit_card_summary()
-    progress = analyzer.calculate_debt_payoff_progress(
-        start_date=datetime.now() - timedelta(days=30),
-        end_date=datetime.now()
+    print(summary)
+
+    # Calculate cash flow over time
+    cash_flow = analyzer.calculate_cash_flow_over_time(
+        start_date=datetime.now() - timedelta(days=180),
+        end_date=datetime.now(),
+        frequency='ME'  # Month end
+    )
+    print(cash_flow)
+
+    # Create visualization
+    visualizer = BudgetVisualizer()
+    visualizer.plot_cash_flow(
+        cash_flow_df=cash_flow,
+        title="My Cash Flow Analysis",
+        save_path="my_cash_flow.png"
     )
 
-    print(summary)
-    print(progress)
+    # Get summary statistics
+    stats = analyzer.calculate_monthly_summary()
+    print(f"Average monthly income: ${stats['avg_monthly_income']:,.2f}")
+    print(f"Average cash balance: ${stats['avg_cash_balance']:,.2f}")
 
 asyncio.run(analyze())
 ```
@@ -224,12 +276,14 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Basic credit card debt analysis
 - [x] Transaction categorization
 - [x] CLI reporting
-- [ ] Monthly trend analysis
+- [x] Monthly trend analysis
+- [x] Cash flow visualization
+- [x] Summary statistics
 - [ ] Debt payoff projections
 - [ ] Category-level breakdowns
 - [ ] CSV/Excel export
-- [ ] Data visualization
-- [ ] Web dashboard (maybe)
+- [ ] Interactive dashboards
+- [ ] Budget vs. actual comparisons
 
 ## Tech Stack
 
