@@ -60,9 +60,19 @@ class CreditCardAnalyzer:
 
         df = pd.DataFrame(self.transactions)
 
+        # Extract account IDs from nested account data
+        # Handle both dict and direct access patterns
+        if 'account' in df.columns:
+            df['account_id'] = df['account'].apply(
+                lambda x: x.get('id') if isinstance(x, dict) else None
+            )
+        else:
+            # If no account column, return empty DataFrames
+            return {'purchases': pd.DataFrame(), 'payments': pd.DataFrame()}
+
         # Filter for credit card transactions
         cc_account_ids = [acc['id'] for acc in self.credit_card_accounts]
-        cc_transactions = df[df.get('account', {}).get('id').isin(cc_account_ids)]
+        cc_transactions = df[df['account_id'].isin(cc_account_ids)]
 
         # Positive amounts are payments, negative are purchases
         # (This may need adjustment based on actual Monarch data format)
@@ -96,13 +106,14 @@ class CreditCardAnalyzer:
             account_id = account['id']
             account_name = account['displayName']
 
-            # Filter transactions for this account
+            # Filter transactions for this account using the account_id column
             account_payments = payments[
-                payments.get('account', {}).get('id') == account_id
-            ]
+                payments['account_id'] == account_id
+            ] if 'account_id' in payments.columns else pd.DataFrame()
+
             account_purchases = purchases[
-                purchases.get('account', {}).get('id') == account_id
-            ]
+                purchases['account_id'] == account_id
+            ] if 'account_id' in purchases.columns else pd.DataFrame()
 
             total_payments = account_payments['amount'].sum() if len(account_payments) > 0 else 0
             total_purchases = abs(account_purchases['amount'].sum()) if len(account_purchases) > 0 else 0
