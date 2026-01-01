@@ -1,0 +1,13 @@
+# Monarch Money API
+monarchmoney
+
+# Data analysis and processing
+pandas
+numpy
+
+# Optional: for visualization
+matplotlib
+seaborn
+
+# Optional: for export formats
+openpyxl

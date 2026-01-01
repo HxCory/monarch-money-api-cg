@@ -1,153 +1,346 @@
-## Unofficial Monarch Money API
+# Monarch Money Custom Budgeting Analysis
+
 ![Monarch Image](https://github.com/pbassham/monarch-money-api/raw/main/monarch-image-blue.png)
-This is an unofficial Javascript API for Monarch Money. It is not endorsed by Monarch Money and may break at any time. Use at your own risk.
+
+A Python-based budgeting analysis tool for Monarch Money with enhanced credit card debt tracking and payoff analysis.
+
+> **Note**: This is an unofficial tool using the unofficial Monarch Money API. It is not endorsed by Monarch Money and may break at any time. Use at your own risk.
+
+## Why This Tool?
+
+Monarch Money is great, but tracking credit card debt payoff can be tricky. This tool helps you:
+
+- **Distinguish debt payoff from spending**: See how much you're actually paying down vs. new purchases
+- **Track multiple cards**: Monitor progress across all your credit cards
+- **Get accurate insights**: Separate debt reduction from regular spending in your budget analysis
+- **Keep it local**: All your financial data stays on your machine
+
+## Features
+
+✅ Credit card account identification and tracking
+✅ Transaction categorization (purchases vs. payments)
+✅ Debt payoff progress calculation
+✅ **Cash flow analysis over time** - Track income, total expenses, CC expenses, and cash balance
+✅ **Visualization** - Beautiful plots showing your financial trends
+✅ **Summary statistics** - Average monthly metrics and totals
+✅ Text-based reporting
+🔄 Payoff projections (coming soon)
+🔄 Export to CSV/Excel (coming soon)
 
 ## Installation
 
-```bash
-npm i monarch-money-api
-```
+### Prerequisites
+
+- Python 3.8 or higher
+- A Monarch Money account
+
+### Setup
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/HxCory/monarch-money-api-cg.git
+   cd monarch-money-api-cg
+   ```
+
+2. **Create a virtual environment** (recommended):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Fix gql compatibility** (if needed):
+
+   The `monarchmoney` library may have issues with `gql>=4.0`. If you see GraphQL errors, downgrade:
+   ```bash
+   pip install 'gql<4.0'
+   ```
 
 ## Configuration
-You will need to create a user token, that you will save as an environment variable in order to use the API.
 
-#### Create a token using the CLI: 
+### Authentication
 
-#### 1. Create a file named `login.js` and add the following code:
+You have two options for authentication:
 
+#### Option 1: Environment Variables
 
-```javascript
-import { interactiveLogin } from "monarch-money-api";
-
-interactiveLogin();
-```
-
-Save.
-
-#### 2. Run the script and enter your credentials:
-Enter this in your teminal and press enter:
 ```bash
-node login.js
+export MONARCH_EMAIL="your-email@example.com"
+export MONARCH_PASSWORD="your-password"
 ```
-You will be prompted to enter your email, password, and 2FA code if you have 2FA enabled.
 
-#### 3. Save the token in your `.env` file:
-After you have logged in, you will be given a token. Copy this token and add it to your `.env` file. (Create a `.env` file if you don't have one.)
+#### Option 2: `.env` File (Recommended)
+
+Create a `.env` file in the project root:
 
 ```env
-MONARCH_TOKEN=your_token_here
+MONARCH_EMAIL=your-email@example.com
+MONARCH_PASSWORD=your-password
 ```
 
-> [!TIP]
-> If deploying to Vercel, you can add an environment variable in local and production environments with the vercel cli:
-> ```bash
-> vercel env add token
-> ```
+> **Security Note**: The `.env` file is in `.gitignore` and will never be committed. See [SECURITY.md](SECURITY.md) for more details.
 
-## Usage Example
-```javascript
-import { getAccounts, getBudgets } from "monarch-money-api";
+### Multi-Factor Authentication (MFA/2FA)
 
-const accounts = await getAccounts();
-console.log("Accounts:", accounts);
+If your Monarch Money account has MFA enabled, you'll need to use interactive login to authenticate:
 
-const budgets = await getBudgets();
-console.log("Budgets:", budgets)
+```bash
+source venv/bin/activate
+python3 -c "from monarchmoney import MonarchMoney; import asyncio; mm = MonarchMoney(); asyncio.run(mm.interactive_login())"
 ```
 
+This will prompt for:
+1. Email
+2. Password
+3. MFA code (from your authenticator app)
 
-## Vercel Example
-You can deploy this to Vercel by creating a new project and adding the token as an environment variable. You can then use the API in your serverless functions.
+The session is saved to `.mm/mm_session.pickle` and reused for future runs.
 
-If you want to use the API in a serverless function, you can create a new file in the `api/budget.js` directory and add the following code:
+### Session Caching
 
-```javascript
-import { getBudgets } from "monarch-money-api";
+After your first successful login, the `monarchmoney` library will save a session token in `.mm/`. You won't need to provide credentials again until the session expires!
 
-export default async function handler(req, res) {
-    try {
-        const budgets = await getBudgets();
-        console.log("Budgets:", budgets)
-        
-        res.status(200).json(budgets);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-}
+## Usage
+
+### Quick Start
+
+**Option 1: Try the demo with test data** (no authentication required):
+
+```bash
+python demo_plot.py
 ```
 
-## API Methods
+This will:
+1. Load realistic dummy data (6 months of transactions)
+2. Calculate cash flow metrics
+3. Generate a visualization showing income, expenses, CC expenses, and cash balance
+4. Save a plot as `cash_flow_demo.png`
 
-```js
-interactiveLogin(useSavedSession = true, saveSession = true)
+**Option 2: Run with your real Monarch Money data**:
 
-login(email, password, useSavedSession = true, saveSession = true, mfaSecretKey = null)
-
-multiFactorAuthenticate(email, password, code)
-
-getAccounts()
-
-getAccountTypeOptions()
-
-getRecentAccountBalances(startDate = null)
-
-getAccountSnapshotsByType(startDate, timeframe)
-
-getAggregateSnapshots(startDate = null, endDate = null, accountType = null)
-
-createManualAccount(accountType, accountSubType, isInNetWorth, accountName, accountBalance = 0)
-
-updateAccount(accountId, accountName = null, accountBalance = null, accountType = null,accountSubType = null, includeInNetWorth = null, hideFromSummaryList = null, hideTransactionsFromReports = null)
-
-deleteAccount(accountId)
-
-requestAccountsRefresh(accountIds)
-
-isAccountsRefreshComplete(accountIds = null)
-
-requestAccountsRefreshAndWait(accountIds = null, timeout = 300, delay = 10)
-
-getAccountHoldings(accountId)
-
-getAccountHistory(accountId)
-
-getInstitutions()
-
-getBudgets(startDate = null, endDate = null, useLegacyGoals = false, useV2Goals = true)
-
-getSubscriptionDetails()
-
-getTransactionsSummary()
-
-getTransactions({ limit = 100, offset = 0, startDate = null, endDate = null, search = "",categoryIds = [], accountIds = [], tagIds = [], hasAttachments = null, hasNotes = null, hiddenFromReports = null, isSplit = null, isRecurring = null, importedFromMint = null, syncedFromInstitution = null })
-
-createTransaction({ date, accountId, amount, merchantName, categoryId, notes = "", updateBalance = false })
-
-deleteTransaction(transactionId)
-
-getTransactionCategories()
-
-deleteTransactionCategory(categoryId)
-
-deleteTransactionCategories(categoryIds)
-
-getTransactionCategoryGroups()
-
-createTransactionCategory({ groupId, transactionCategoryName, rolloverStartMonth = new Dat(), icon = "\u2753", rolloverEnabled = false, rolloverType = "monthly" })
-
-createTransactionTag(name, color)
-
-getTransactionTags()
-
-setTransactionTags(transactionId, tagIds)
-
-getTransactionDetails(transactionId, redirectPosted = true)
-
-getTransactionSplits(transactionId)
-
-updateTransactionSplits(transactionId, splitData)
+```bash
+python example.py
 ```
+
+This will:
+1. Login to your Monarch Money account
+2. Fetch your accounts and 6 months of transactions
+3. Analyze your credit card debt
+4. Display a summary report
+5. Generate time series visualizations in `output/analysis_YYYYMMDD_HHMMSS/`
+
+### Example Output
+
+```
+Monarch Money - Custom Budgeting Analysis
+============================================================
+
+Logging in to Monarch Money...
+✓ Login successful
+
+Fetching account data...
+✓ Found 12 accounts
+✓ Found 3 credit card accounts
+
+Fetching transactions from 2025-01-01 to 2025-01-31...
+✓ Found 145 transactions
+
+============================================================
+CREDIT CARD DEBT ANALYSIS REPORT
+============================================================
+
+Account Summary:
+------------------------------------------------------------
+  Chase Sapphire: $-1,245.67
+  Capital One: $-850.32
+  Discover: $-0.00
+
+Total Credit Card Debt: $-2,095.99
+
+Transaction Summary:
+------------------------------------------------------------
+  New Purchases: 42 transactions
+  Payments: 3 transactions
+
+  Total New Purchases: $1,892.45
+  Total Payments: $2,500.00
+============================================================
+```
+
+## Project Structure
+
+```
+monarch-money-api-cg/
+├── monarch_budgeting/          # Main Python package
+│   ├── __init__.py            # Package initialization
+│   ├── client.py              # Monarch Money API client wrapper
+│   ├── analyzer.py            # Credit card debt analysis logic
+│   ├── visualizer.py          # Visualization and plotting
+│   └── main.py                # Main CLI entry point
+├── output/                    # Generated analysis output (gitignored)
+│   └── analysis_YYYYMMDD_HHMMSS/  # Timestamped run directories
+├── tmp/JS/                    # Original JavaScript implementation (archived)
+├── requirements.txt           # Python dependencies
+├── pyproject.toml            # Modern Python project configuration
+├── example.py                # Example usage script (requires auth)
+├── demo_plot.py              # Demo with test data (no auth required)
+├── test_data.py              # Dummy API response data for testing
+├── test_basic.py             # Basic tests (no auth required)
+├── SECURITY.md               # Security guidelines
+├── TEST_RESULTS.md           # Cloud testing results
+├── claude.md                 # Project planning document
+└── README.md                 # This file
+```
+
+## Cash Flow Visualization
+
+The tool generates beautiful plots showing your financial trends over time:
+
+![Cash Flow Demo](cash_flow_demo.png)
+
+The plot shows four key metrics:
+- **Income (Green)**: Your total income per period
+- **Total Expenses (Red)**: All your expenses
+- **CC Expenses (Orange)**: Expenses charged to credit cards
+- **Cash Balance (Blue)**: Income minus non-CC expenses
+
+**Cash Balance Formula**: `Income - (Total Expenses - CC Expenses)`
+
+This metric shows how much cash you're keeping after paying for everything that doesn't go on credit cards.
+
+## Advanced Usage
+
+### Using as a Library
+
+```python
+import asyncio
+from monarch_budgeting.client import MonarchClient
+from monarch_budgeting.analyzer import CreditCardAnalyzer
+from monarch_budgeting.visualizer import BudgetVisualizer
+from datetime import datetime, timedelta
+
+async def analyze():
+    # Initialize and login
+    client = MonarchClient()
+    await client.login(use_saved_session=True)
+
+    # Fetch data
+    accounts = await client.get_accounts()
+    transactions = await client.get_transactions(
+        start_date=datetime.now() - timedelta(days=30),
+        end_date=datetime.now()
+    )
+
+    # Analyze
+    analyzer = CreditCardAnalyzer(transactions, accounts)
+
+    # Get credit card summary
+    summary = analyzer.get_credit_card_summary()
+    print(summary)
+
+    # Calculate cash flow over time
+    cash_flow = analyzer.calculate_cash_flow_over_time(
+        start_date=datetime.now() - timedelta(days=180),
+        end_date=datetime.now(),
+        frequency='ME'  # Month end
+    )
+    print(cash_flow)
+
+    # Create visualization
+    visualizer = BudgetVisualizer()
+    visualizer.plot_cash_flow(
+        cash_flow_df=cash_flow,
+        title="My Cash Flow Analysis",
+        save_path="my_cash_flow.png"
+    )
+
+    # Get summary statistics
+    stats = analyzer.calculate_monthly_summary()
+    print(f"Average monthly income: ${stats['avg_monthly_income']:,.2f}")
+    print(f"Average cash balance: ${stats['avg_cash_balance']:,.2f}")
+
+asyncio.run(analyze())
+```
+
+### Running Tests
+
+Run basic tests without authentication:
+
+```bash
+python test_basic.py
+```
+
+## Security
+
+🔒 **Your credentials are safe!**
+
+- Passwords never stored in code or logs
+- Credentials only via environment variables or `.env` file
+- Session tokens stored locally in `.mm/` (excluded from git)
+- All financial data stays on your machine
+- No third-party data sharing
+
+See [SECURITY.md](SECURITY.md) for complete security guidelines.
+
+## Development
+
+### Contributing
+
+This is a personal project, but contributions are welcome! If you have ideas for improvements:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+### Roadmap
+
+- [x] Basic credit card debt analysis
+- [x] Transaction categorization
+- [x] CLI reporting
+- [x] Monthly trend analysis
+- [x] Cash flow visualization
+- [x] Summary statistics
+- [x] Time series visualizations (payments vs purchases, by card, cumulative debt)
+- [x] Timestamped output directories
+- [ ] Debt payoff projections
+- [ ] Category-level breakdowns
+- [ ] CSV/Excel export
+- [ ] Interactive dashboards
+- [ ] Budget vs. actual comparisons
+
+## Tech Stack
+
+- **Python 3.8+**
+- **[monarchmoney](https://github.com/hammem/monarchmoney)** - Python library for Monarch Money API
+- **pandas** - Data processing and analysis
+- **numpy** - Numerical computations
 
 ## Credits
 
-This API is based on a lot of [Monarch Money](https://github.com/hammem/monarchmoney), a python library to access Monarch data.
+This project uses the [monarchmoney](https://github.com/hammem/monarchmoney) Python library by @hammem for accessing the Monarch Money API.
+
+The original JavaScript implementation (now in `tmp/JS/`) was forked from [pbassham/monarch-money-api](https://github.com/pbassham/monarch-money-api).
+
+## License
+
+MIT License - See [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+This tool is provided "as is" without warranty of any kind. It uses an unofficial API that could break at any time. Users are responsible for:
+
+- Securing their own credentials
+- Reviewing code before running it
+- Understanding the risks of using unofficial APIs
+- Complying with Monarch Money's Terms of Service
+
+Use at your own risk!
+
+---
+
+**Questions or issues?** Open an issue on GitHub or check the [claude.md](claude.md) file for project planning details.
