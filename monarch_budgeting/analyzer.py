@@ -5,9 +5,10 @@ This module provides analysis functionality for credit card debt payoff
 and custom budgeting insights.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import pandas as pd
+import numpy as np
 
 
 class CreditCardAnalyzer:
@@ -175,3 +176,131 @@ class CreditCardAnalyzer:
         report.append("=" * 60)
 
         return "\n".join(report)
+
+    def calculate_cash_flow_over_time(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        frequency: str = 'ME'
+    ) -> pd.DataFrame:
+        """
+        Calculate income, expenses, CC expenses, and cash balance over time.
+
+        Args:
+            start_date: Start date for analysis (optional)
+            end_date: End date for analysis (optional)
+            frequency: Pandas frequency string ('D'=daily, 'W'=weekly, 'ME'=month end)
+
+        Returns:
+            DataFrame with columns: date, income, total_expenses, cc_expenses, cash_balance
+        """
+        if not self.transactions:
+            return pd.DataFrame(columns=['date', 'income', 'total_expenses', 'cc_expenses', 'cash_balance'])
+
+        # Create DataFrame from transactions
+        df = pd.DataFrame(self.transactions)
+
+        # Parse dates
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Filter by date range if provided
+        if start_date:
+            df = df[df['date'] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df['date'] <= pd.to_datetime(end_date)]
+
+        # Get credit card account IDs
+        cc_account_ids = [acc['id'] for acc in self.credit_card_accounts]
+
+        # Add account_id column
+        if 'account' in df.columns:
+            df['account_id'] = df['account'].apply(
+                lambda x: x.get('id') if isinstance(x, dict) else None
+            )
+        else:
+            df['account_id'] = None
+
+        # Mark if transaction is from CC
+        df['is_cc'] = df['account_id'].isin(cc_account_ids)
+
+        # In Monarch Money:
+        # - Positive amounts = income/payments/credits
+        # - Negative amounts = expenses/purchases/debits
+
+        # Calculate components
+        df['income'] = df['amount'].apply(lambda x: x if x > 0 else 0)
+        df['expense'] = df['amount'].apply(lambda x: -x if x < 0 else 0)
+        df['cc_expense'] = df.apply(
+            lambda row: -row['amount'] if row['amount'] < 0 and row['is_cc'] else 0,
+            axis=1
+        )
+
+        # Group by time period
+        grouped = df.groupby(pd.Grouper(key='date', freq=frequency)).agg({
+            'income': 'sum',
+            'expense': 'sum',
+            'cc_expense': 'sum'
+        }).reset_index()
+
+        # Rename columns
+        grouped.columns = ['date', 'income', 'total_expenses', 'cc_expenses']
+
+        # Calculate cash balance = income - (total_expenses - cc_expenses)
+        # This represents cash flow from non-CC expenses
+        grouped['cash_balance'] = grouped['income'] - (grouped['total_expenses'] - grouped['cc_expenses'])
+
+        # Remove rows where all values are zero
+        grouped = grouped[(grouped['income'] != 0) |
+                         (grouped['total_expenses'] != 0) |
+                         (grouped['cc_expenses'] != 0)]
+
+        return grouped
+
+    def get_cc_account_ids(self) -> List[str]:
+        """
+        Get list of credit card account IDs.
+
+        Returns:
+            List of credit card account IDs
+        """
+        return [acc['id'] for acc in self.credit_card_accounts]
+
+    def calculate_monthly_summary(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> Dict[str, float]:
+        """
+        Calculate summary statistics for the time period.
+
+        Args:
+            start_date: Start date for analysis (optional)
+            end_date: End date for analysis (optional)
+
+        Returns:
+            Dictionary with summary statistics
+        """
+        cash_flow = self.calculate_cash_flow_over_time(start_date, end_date, frequency='ME')
+
+        if cash_flow.empty:
+            return {
+                'total_income': 0,
+                'total_expenses': 0,
+                'total_cc_expenses': 0,
+                'avg_monthly_income': 0,
+                'avg_monthly_expenses': 0,
+                'avg_monthly_cc_expenses': 0,
+                'avg_cash_balance': 0,
+                'net_cash_flow': 0
+            }
+
+        return {
+            'total_income': cash_flow['income'].sum(),
+            'total_expenses': cash_flow['total_expenses'].sum(),
+            'total_cc_expenses': cash_flow['cc_expenses'].sum(),
+            'avg_monthly_income': cash_flow['income'].mean(),
+            'avg_monthly_expenses': cash_flow['total_expenses'].mean(),
+            'avg_monthly_cc_expenses': cash_flow['cc_expenses'].mean(),
+            'avg_cash_balance': cash_flow['cash_balance'].mean(),
+            'net_cash_flow': cash_flow['income'].sum() - cash_flow['total_expenses'].sum()
+        }
