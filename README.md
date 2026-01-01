@@ -53,6 +53,13 @@ Monarch Money is great, but tracking credit card debt payoff can be tricky. This
    pip install -r requirements.txt
    ```
 
+4. **Fix gql compatibility** (if needed):
+
+   The `monarchmoney` library may have issues with `gql>=4.0`. If you see GraphQL errors, downgrade:
+   ```bash
+   pip install 'gql<4.0'
+   ```
+
 ## Configuration
 
 ### Authentication
@@ -77,9 +84,25 @@ MONARCH_PASSWORD=your-password
 
 > **Security Note**: The `.env` file is in `.gitignore` and will never be committed. See [SECURITY.md](SECURITY.md) for more details.
 
+### Multi-Factor Authentication (MFA/2FA)
+
+If your Monarch Money account has MFA enabled, you'll need to use interactive login to authenticate:
+
+```bash
+source venv/bin/activate
+python3 -c "from monarchmoney import MonarchMoney; import asyncio; mm = MonarchMoney(); asyncio.run(mm.interactive_login())"
+```
+
+This will prompt for:
+1. Email
+2. Password
+3. MFA code (from your authenticator app)
+
+The session is saved to `.mm/mm_session.pickle` and reused for future runs.
+
 ### Session Caching
 
-After your first successful login, the `monarchmoney` library will save a session token. You won't need to provide credentials again until the session expires!
+After your first successful login, the `monarchmoney` library will save a session token in `.mm/`. You won't need to provide credentials again until the session expires!
 
 ## Usage
 
@@ -105,9 +128,10 @@ python example.py
 
 This will:
 1. Login to your Monarch Money account
-2. Fetch your accounts and transactions
+2. Fetch your accounts and 6 months of transactions
 3. Analyze your credit card debt
 4. Display a summary report
+5. Generate time series visualizations in `output/analysis_YYYYMMDD_HHMMSS/`
 
 ### Example Output
 
@@ -157,6 +181,8 @@ monarch-money-api-cg/
 │   ├── analyzer.py            # Credit card debt analysis logic
 │   ├── visualizer.py          # Visualization and plotting
 │   └── main.py                # Main CLI entry point
+├── output/                    # Generated analysis output (gitignored)
+│   └── analysis_YYYYMMDD_HHMMSS/  # Timestamped run directories
 ├── tmp/JS/                    # Original JavaScript implementation (archived)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration
@@ -279,6 +305,8 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Monthly trend analysis
 - [x] Cash flow visualization
 - [x] Summary statistics
+- [x] Time series visualizations (payments vs purchases, by card, cumulative debt)
+- [x] Timestamped output directories
 - [ ] Debt payoff projections
 - [ ] Category-level breakdowns
 - [ ] CSV/Excel export
