@@ -425,3 +425,229 @@ class CreditCardAnalyzer:
             'avg_cash_balance': cash_flow['cash_balance'].mean(),
             'net_cash_flow': cash_flow['income'].sum() - cash_flow['total_expenses'].sum()
         }
+
+
+class CashBudgetAnalyzer:
+    """
+    Analyzer for cash-based budgeting that separates CC spending from cash flow.
+
+    This provides a more accurate view of actual cash remaining by treating
+    credit card spending separately from when cash actually leaves (CC payments).
+    """
+
+    def __init__(self,
+                 transactions: List[Dict[str, Any]],
+                 accounts: List[Dict[str, Any]],
+                 categories: Dict[str, Any]):
+        """
+        Initialize the cash budget analyzer.
+
+        Args:
+            transactions: List of transaction dictionaries
+            accounts: List of account dictionaries
+            categories: Dictionary of Category objects keyed by ID
+        """
+        self.transactions = transactions
+        self.accounts = accounts
+        self.categories = categories
+
+        # Identify credit card accounts
+        self.cc_account_ids = set(
+            acc.get('id') for acc in accounts
+            if acc.get('type', {}).get('name') == 'credit'
+        )
+
+        # Find the credit card payment category
+        self.cc_payment_category_id = None
+        for cat_id, cat in categories.items():
+            if cat.is_cc_payment:
+                self.cc_payment_category_id = cat_id
+                break
+
+    def _prepare_dataframe(self) -> pd.DataFrame:
+        """Convert transactions to DataFrame with necessary computed columns."""
+        if not self.transactions:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(self.transactions)
+
+        # Extract nested fields
+        df['account_id'] = df['account'].apply(
+            lambda x: x.get('id') if isinstance(x, dict) else None
+        )
+        df['category_id'] = df['category'].apply(
+            lambda x: x.get('id') if isinstance(x, dict) else None
+        )
+        df['category_name'] = df['category'].apply(
+            lambda x: x.get('name', 'Uncategorized') if isinstance(x, dict) else 'Uncategorized'
+        )
+
+        # Parse dates
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Flag CC transactions
+        df['is_cc_account'] = df['account_id'].isin(self.cc_account_ids)
+
+        # Flag CC payment transactions
+        df['is_cc_payment'] = df['category_id'] == self.cc_payment_category_id
+
+        return df
+
+    def calculate_top_level_metrics(self,
+                                    start_date: Optional[datetime] = None,
+                                    end_date: Optional[datetime] = None) -> Dict[str, float]:
+        """
+        Calculate the top-level budget metrics.
+
+        Returns dict with:
+        - total_income: All positive amounts (income)
+        - total_expenses: All negative amounts (expenses, absolute value)
+        - cc_expenses: Expenses on credit card accounts
+        - cash_expenses: Expenses on non-CC accounts
+        - cc_payments: Payments made to credit cards
+        - true_cash_remaining: Income - Cash Expenses - CC Payments
+        - total_new_cc_spending: Same as cc_expenses
+        """
+        df = self._prepare_dataframe()
+
+        if df.empty:
+            return {
+                'total_income': 0,
+                'total_expenses': 0,
+                'cc_expenses': 0,
+                'cash_expenses': 0,
+                'cc_payments': 0,
+                'true_cash_remaining': 0,
+                'total_new_cc_spending': 0
+            }
+
+        # Filter by date range if provided
+        if start_date:
+            df = df[df['date'] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df['date'] <= pd.to_datetime(end_date)]
+
+        # Income: positive amounts (excluding CC payments which are transfers)
+        income_df = df[(df['amount'] > 0) & (~df['is_cc_payment'])]
+        total_income = income_df['amount'].sum()
+
+        # All expenses: negative amounts (excluding CC payment category)
+        expense_df = df[(df['amount'] < 0) & (~df['is_cc_payment'])]
+        total_expenses = abs(expense_df['amount'].sum())
+
+        # CC expenses: negative amounts on CC accounts
+        cc_expense_df = expense_df[expense_df['is_cc_account']]
+        cc_expenses = abs(cc_expense_df['amount'].sum())
+
+        # Cash expenses: negative amounts NOT on CC accounts
+        cash_expenses = total_expenses - cc_expenses
+
+        # CC Payments: transactions in the CC payment category
+        # These show as negative from checking (paying) and positive on CC (receiving)
+        # We want the outflow from non-CC accounts
+        cc_payment_df = df[df['is_cc_payment'] & ~df['is_cc_account'] & (df['amount'] < 0)]
+        cc_payments = abs(cc_payment_df['amount'].sum())
+
+        # True Cash Remaining = Income - Cash Expenses - CC Payments
+        true_cash_remaining = total_income - cash_expenses - cc_payments
+
+        return {
+            'total_income': total_income,
+            'total_expenses': total_expenses,
+            'cc_expenses': cc_expenses,
+            'cash_expenses': cash_expenses,
+            'cc_payments': cc_payments,
+            'true_cash_remaining': true_cash_remaining,
+            'total_new_cc_spending': cc_expenses
+        }
+
+    def calculate_category_breakdown(self,
+                                     start_date: Optional[datetime] = None,
+                                     end_date: Optional[datetime] = None) -> pd.DataFrame:
+        """
+        Calculate spending breakdown by category.
+
+        Returns DataFrame with columns:
+        - category_id, category_name, group_name, category_type
+        - actual_amount: Total spending in category
+        - cc_amount: Amount spent on credit cards
+        - cash_amount: Amount spent with cash/debit
+        """
+        df = self._prepare_dataframe()
+
+        if df.empty:
+            return pd.DataFrame(columns=[
+                'category_id', 'category_name', 'group_name', 'category_type',
+                'actual_amount', 'cc_amount', 'cash_amount'
+            ])
+
+        # Filter by date range
+        if start_date:
+            df = df[df['date'] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df['date'] <= pd.to_datetime(end_date)]
+
+        # Exclude CC payment transfers from breakdown
+        df = df[~df['is_cc_payment']]
+
+        results = []
+
+        for cat_id, group in df.groupby('category_id'):
+            if cat_id is None:
+                continue
+
+            cat = self.categories.get(cat_id)
+            if not cat:
+                continue
+
+            # Calculate amounts
+            total = group['amount'].sum()
+            cc_total = group[group['is_cc_account']]['amount'].sum()
+
+            # For expenses (negative), we want absolute values
+            if cat.is_expense:
+                actual = abs(total)
+                cc_amt = abs(cc_total)
+            else:
+                actual = total
+                cc_amt = cc_total
+
+            cash_amt = actual - cc_amt if cat.is_expense else 0
+
+            results.append({
+                'category_id': cat_id,
+                'category_name': cat.name,
+                'group_name': cat.group_name,
+                'category_type': cat.category_type.value,
+                'actual_amount': actual,
+                'cc_amount': cc_amt if cat.is_expense else 0,
+                'cash_amount': cash_amt
+            })
+
+        result_df = pd.DataFrame(results)
+
+        # Sort by category type (income first) then by actual amount
+        if not result_df.empty:
+            type_order = {'income': 0, 'expense': 1, 'transfer': 2}
+            result_df['type_order'] = result_df['category_type'].map(type_order)
+            result_df = result_df.sort_values(
+                ['type_order', 'actual_amount'],
+                ascending=[True, False]
+            )
+            result_df = result_df.drop('type_order', axis=1)
+
+        return result_df
+
+    def get_income_breakdown(self,
+                             start_date: Optional[datetime] = None,
+                             end_date: Optional[datetime] = None) -> pd.DataFrame:
+        """Get just the income categories breakdown."""
+        breakdown = self.calculate_category_breakdown(start_date, end_date)
+        return breakdown[breakdown['category_type'] == 'income']
+
+    def get_expense_breakdown(self,
+                              start_date: Optional[datetime] = None,
+                              end_date: Optional[datetime] = None) -> pd.DataFrame:
+        """Get just the expense categories breakdown."""
+        breakdown = self.calculate_category_breakdown(start_date, end_date)
+        return breakdown[breakdown['category_type'] == 'expense']

@@ -57,27 +57,32 @@ To be determined - options include:
 - [x] Added timestamped output directories for analysis runs
 - [x] Tested with real Monarch Money account data
 
-### 🔄 In Progress - Enhanced Cash-Based Budget Feature
+### ✅ Completed - Enhanced Cash-Based Budget Feature
 **Branch**: `feature/cc-enhanced-budget`
 
 **Goal**: Show TRUE CASH REMAINING by separating CC spending from actual cash outflows.
 
+**Usage**:
+```bash
+python cash_budget.py                    # Previous month
+python cash_budget.py --month 2025-12    # Specific month
+python cash_budget.py --month 2025-12 --save  # Save to file
+```
+
 **Top-Level Metrics**:
 1. True Cash Remaining = Income - Cash Expenses - CC Payments
 2. Total New CC Spending = Sum of all CC transactions
-3. ~~Budget Target~~ (deferred - API issue)
+3. ~~Budget Target~~ (deferred - Monarch API issue, will add user-defined budgets later)
 
-**Phases**:
-- [x] Phase 1: API explorer script (`explore_budgets.py`) - categories working
-- [ ] Phase 2: Data structures for categories
-- [ ] Phase 3: CashBudgetAnalyzer class
-- [ ] Phase 4: Rich terminal display
-- [ ] Phase 5: CLI integration
-- [ ] Phase 6: Refinements
+**Phases Completed**:
+- [x] Phase 1: API explorer script (`explore_budgets.py`)
+- [x] Phase 2: Data structures (`budget_data.py`)
+- [x] Phase 3: CashBudgetAnalyzer class (in `analyzer.py`)
+- [x] Phase 4: Rich terminal display (`budget_display.py`)
+- [x] Phase 5: CLI integration (`cash_budget.py`)
+- [ ] Phase 6: Refinements (deferred)
 
-**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Will add user-defined budgets later as workaround.
-
-**Plan file**: `~/.claude/plans/mossy-exploring-shamir.md`
+**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Budget targets deferred.
 
 ### 📋 Future Steps
 1. Complete enhanced cash budget feature
