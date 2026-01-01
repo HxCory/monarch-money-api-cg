@@ -52,22 +52,38 @@ To be determined - options include:
 - [x] Added basic credit card summary and categorization
 - [x] Created example script for running analysis
 - [x] Moved original JavaScript implementation to `tmp/JS/`
+- [x] Fixed API compatibility (gql<4.0, response format parsing)
+- [x] Added time series visualizations (payments vs purchases, by card, cumulative debt)
+- [x] Added timestamped output directories for analysis runs
+- [x] Tested with real Monarch Money account data
 
-### 🔄 In Progress
-- [ ] Test with real Monarch Money account
-- [ ] Refine transaction categorization logic
-- [ ] Validate data format assumptions
+### 🔄 In Progress - Enhanced Cash-Based Budget Feature
+**Branch**: `feature/cc-enhanced-budget`
 
-### 📋 Next Steps
-1. Install dependencies and test authentication
-2. Run initial analysis to understand data structure
-3. Refine credit card debt payoff calculations based on actual data
-4. Add more detailed reporting features:
-   - Monthly trends
-   - Payoff projections
-   - Category breakdowns
-5. Add export functionality (CSV/Excel)
-6. Consider visualization options
+**Goal**: Show TRUE CASH REMAINING by separating CC spending from actual cash outflows.
+
+**Top-Level Metrics**:
+1. True Cash Remaining = Income - Cash Expenses - CC Payments
+2. Total New CC Spending = Sum of all CC transactions
+3. ~~Budget Target~~ (deferred - API issue)
+
+**Phases**:
+- [x] Phase 1: API explorer script (`explore_budgets.py`) - categories working
+- [ ] Phase 2: Data structures for categories
+- [ ] Phase 3: CashBudgetAnalyzer class
+- [ ] Phase 4: Rich terminal display
+- [ ] Phase 5: CLI integration
+- [ ] Phase 6: Refinements
+
+**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Will add user-defined budgets later as workaround.
+
+**Plan file**: `~/.claude/plans/mossy-exploring-shamir.md`
+
+### 📋 Future Steps
+1. Complete enhanced cash budget feature
+2. Add user-defined budget targets (JSON config)
+3. Add export functionality (CSV/Excel)
+4. Consider payoff projections
 
 ## Quick Start
 
