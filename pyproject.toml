@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monarch-budgeting"
+version = "0.1.0"
+description = "Custom budgeting analysis for Monarch Money with credit card debt tracking"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "monarchmoney",
+    "pandas",
+    "numpy",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib", "seaborn"]
+export = ["openpyxl"]
+dev = ["pytest", "black", "mypy"]
+
+[project.urls]
+Homepage = "https://github.com/HxCory/monarch-money-api-cg"
+Repository = "https://github.com/HxCory/monarch-money-api-cg"
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
