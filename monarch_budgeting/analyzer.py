@@ -265,6 +265,127 @@ class CreditCardAnalyzer:
         """
         return [acc['id'] for acc in self.credit_card_accounts]
 
+    def calculate_monthly_cc_activity(self) -> pd.DataFrame:
+        """
+        Calculate monthly credit card payments and purchases (all cards combined).
+
+        Returns:
+            DataFrame with columns: month, total_payments, total_purchases, net_change
+        """
+        categorized = self.categorize_transactions()
+        payments = categorized['payments']
+        purchases = categorized['purchases']
+
+        if payments.empty and purchases.empty:
+            return pd.DataFrame(columns=['month', 'total_payments', 'total_purchases', 'net_change'])
+
+        # Process payments
+        if not payments.empty:
+            payments = payments.copy()
+            payments['date'] = pd.to_datetime(payments['date'])
+            payments['month'] = payments['date'].dt.to_period('M').dt.to_timestamp()
+            monthly_payments = payments.groupby('month')['amount'].sum().reset_index()
+            monthly_payments.columns = ['month', 'total_payments']
+        else:
+            monthly_payments = pd.DataFrame(columns=['month', 'total_payments'])
+
+        # Process purchases
+        if not purchases.empty:
+            purchases = purchases.copy()
+            purchases['date'] = pd.to_datetime(purchases['date'])
+            purchases['month'] = purchases['date'].dt.to_period('M').dt.to_timestamp()
+            monthly_purchases = purchases.groupby('month')['amount'].sum().abs().reset_index()
+            monthly_purchases.columns = ['month', 'total_purchases']
+        else:
+            monthly_purchases = pd.DataFrame(columns=['month', 'total_purchases'])
+
+        # Merge
+        if not monthly_payments.empty and not monthly_purchases.empty:
+            result = pd.merge(monthly_payments, monthly_purchases, on='month', how='outer')
+        elif not monthly_payments.empty:
+            result = monthly_payments
+            result['total_purchases'] = 0
+        elif not monthly_purchases.empty:
+            result = monthly_purchases
+            result['total_payments'] = 0
+        else:
+            return pd.DataFrame(columns=['month', 'total_payments', 'total_purchases', 'net_change'])
+
+        result = result.fillna(0)
+        result['net_change'] = result['total_payments'] - result['total_purchases']
+        result = result.sort_values('month')
+
+        return result
+
+    def calculate_monthly_cc_by_account(self) -> pd.DataFrame:
+        """
+        Calculate monthly credit card activity broken down by account.
+
+        Returns:
+            DataFrame with columns: month, account_name, total_payments, total_purchases, net_change
+        """
+        categorized = self.categorize_transactions()
+        payments = categorized['payments']
+        purchases = categorized['purchases']
+
+        if payments.empty and purchases.empty:
+            return pd.DataFrame(columns=['month', 'account_name', 'total_payments', 'total_purchases', 'net_change'])
+
+        # Create account ID to name mapping
+        account_map = {acc['id']: acc['displayName'] for acc in self.credit_card_accounts}
+
+        results = []
+
+        for account_id, account_name in account_map.items():
+            # Filter transactions for this account
+            acc_payments = payments[payments['account_id'] == account_id] if not payments.empty and 'account_id' in payments.columns else pd.DataFrame()
+            acc_purchases = purchases[purchases['account_id'] == account_id] if not purchases.empty and 'account_id' in purchases.columns else pd.DataFrame()
+
+            # Monthly payments
+            if not acc_payments.empty:
+                acc_payments = acc_payments.copy()
+                acc_payments['date'] = pd.to_datetime(acc_payments['date'])
+                acc_payments['month'] = acc_payments['date'].dt.to_period('M').dt.to_timestamp()
+                monthly_pay = acc_payments.groupby('month')['amount'].sum().reset_index()
+                monthly_pay.columns = ['month', 'total_payments']
+            else:
+                monthly_pay = pd.DataFrame(columns=['month', 'total_payments'])
+
+            # Monthly purchases
+            if not acc_purchases.empty:
+                acc_purchases = acc_purchases.copy()
+                acc_purchases['date'] = pd.to_datetime(acc_purchases['date'])
+                acc_purchases['month'] = acc_purchases['date'].dt.to_period('M').dt.to_timestamp()
+                monthly_purch = acc_purchases.groupby('month')['amount'].sum().abs().reset_index()
+                monthly_purch.columns = ['month', 'total_purchases']
+            else:
+                monthly_purch = pd.DataFrame(columns=['month', 'total_purchases'])
+
+            # Merge for this account
+            if not monthly_pay.empty and not monthly_purch.empty:
+                merged = pd.merge(monthly_pay, monthly_purch, on='month', how='outer')
+            elif not monthly_pay.empty:
+                merged = monthly_pay
+                merged['total_purchases'] = 0
+            elif not monthly_purch.empty:
+                merged = monthly_purch
+                merged['total_payments'] = 0
+            else:
+                continue
+
+            merged = merged.fillna(0)
+            merged['account_name'] = account_name
+            merged['net_change'] = merged['total_payments'] - merged['total_purchases']
+            results.append(merged)
+
+        if not results:
+            return pd.DataFrame(columns=['month', 'account_name', 'total_payments', 'total_purchases', 'net_change'])
+
+        result = pd.concat(results, ignore_index=True)
+        result = result.sort_values(['month', 'account_name'])
+
+        return result
+
     def calculate_monthly_summary(
         self,
         start_date: Optional[datetime] = None,

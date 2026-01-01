@@ -19,7 +19,7 @@ class MonarchClient:
         self._authenticated = False
 
     async def login(self, email: Optional[str] = None, password: Optional[str] = None,
-                   use_saved_session: bool = True) -> bool:
+                   use_saved_session: bool = True, mfa_secret_key: Optional[str] = None) -> bool:
         """
         Login to Monarch Money.
 
@@ -27,34 +27,33 @@ class MonarchClient:
             email: User email (optional if using saved session)
             password: User password (optional if using saved session)
             use_saved_session: Whether to try using a saved session first
+            mfa_secret_key: TOTP secret for MFA (optional)
 
         Returns:
             True if login successful
         """
-        if use_saved_session:
-            try:
-                await self.mm.load_session()
-                self._authenticated = True
-                return True
-            except Exception:
-                pass
-
-        if email and password:
-            await self.mm.login(email, password)
-            self._authenticated = True
-            return True
-
-        raise ValueError("Must provide email and password or have a saved session")
+        # The library's login() method handles saved sessions automatically
+        await self.mm.login(
+            email=email,
+            password=password,
+            use_saved_session=use_saved_session,
+            mfa_secret_key=mfa_secret_key
+        )
+        self._authenticated = True
+        return True
 
     async def get_accounts(self) -> List[Dict[str, Any]]:
         """Get all accounts."""
         if not self._authenticated:
             raise RuntimeError("Must login first")
-        return await self.mm.get_accounts()
+        result = await self.mm.get_accounts()
+        # API returns {'accounts': [...], 'householdPreferences': ...}
+        return result.get('accounts', [])
 
     async def get_credit_card_accounts(self) -> List[Dict[str, Any]]:
         """Get only credit card accounts."""
         accounts = await self.get_accounts()
+        # type.name is 'credit' for credit cards
         return [acc for acc in accounts if acc.get('type', {}).get('name') == 'credit']
 
     async def get_transactions(self, start_date: Optional[datetime] = None,
@@ -82,12 +81,14 @@ class MonarchClient:
         if not end_date:
             end_date = datetime.now()
 
-        return await self.mm.get_transactions(
+        result = await self.mm.get_transactions(
             start_date=start_date.strftime('%Y-%m-%d'),
             end_date=end_date.strftime('%Y-%m-%d'),
             account_ids=account_ids,
             limit=limit
         )
+        # API returns {'allTransactions': {'totalCount': N, 'results': [...]}, ...}
+        return result.get('allTransactions', {}).get('results', [])
 
     async def get_budgets(self, start_date: Optional[str] = None,
                          end_date: Optional[str] = None) -> Dict[str, Any]:
