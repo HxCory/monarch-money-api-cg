@@ -115,6 +115,58 @@ CC Payments:         {self._format_currency(metrics['cc_payments'])}
             for i in range(len(columns)):
                 table[(last_row, i)].set_text_props(fontweight='bold')
 
+    def _create_transfers_page(self, fig, df: pd.DataFrame, title: str):
+        """Create a page showing transfer transactions."""
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
+        if df.empty:
+            ax.text(0.5, 0.5, 'No transfer transactions', ha='center', va='center', fontsize=12)
+            return
+
+        # Prepare table data
+        col_labels = ['Date', 'Description', 'Amount', 'Account', 'Category']
+        table_data = []
+
+        for _, row in df.iterrows():
+            table_data.append([
+                str(row.get('date', '')),
+                str(row.get('description', ''))[:35],  # Truncate long descriptions
+                self._format_currency(row.get('amount', 0)),
+                str(row.get('account_name', ''))[:15],  # Truncate long account names
+                str(row.get('category_name', ''))[:15]  # Show category
+            ])
+
+        # Add total row
+        total_amount = df['amount'].sum() if 'amount' in df.columns else 0
+        table_data.append(['', 'TOTAL', self._format_currency(total_amount), '', ''])
+
+        # Create table
+        table = ax.table(cellText=table_data,
+                        colLabels=col_labels,
+                        loc='center',
+                        cellLoc='right')
+
+        # Style the table
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1.2, 1.3)
+
+        # Style header row
+        for i in range(len(col_labels)):
+            table[(0, i)].set_facecolor('#C44472')  # Different color for this section
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+        # Style total row
+        last_row = len(table_data)
+        for i in range(len(col_labels)):
+            table[(last_row, i)].set_text_props(fontweight='bold')
+
+        # Left-align description column
+        for row_idx in range(len(table_data) + 1):
+            table[(row_idx, 1)].set_text_props(ha='left')
+
     def _create_balance_chart(self, fig, account_histories: Dict[str, List[Dict]],
                               start_date: datetime, end_date: datetime, month: str):
         """Create a line chart of cash balances over time."""
@@ -203,7 +255,8 @@ CC Payments:         {self._format_currency(metrics['cc_payments'])}
                        account_histories: Dict[str, List[Dict]],
                        start_date: datetime,
                        end_date: datetime,
-                       month: str = ""):
+                       month: str = "",
+                       transfers_df: Optional[pd.DataFrame] = None):
         """
         Generate a complete PDF report.
 
@@ -253,7 +306,17 @@ Cash Account Balances:
             pdf.savefig(fig, bbox_inches='tight')
             plt.close(fig)
 
-            # Page 4: Cash balance chart
+            # Page 4: Transfer transactions (excluded from expense metrics)
+            if transfers_df is not None and not transfers_df.empty:
+                fig = plt.figure(figsize=(8.5, 11))
+                self._create_transfers_page(
+                    fig, transfers_df,
+                    'Transfers (Excluded from Expense Metrics)'
+                )
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+
+            # Page 5: Cash balance chart
             if account_histories:
                 fig = plt.figure(figsize=(11, 8.5))  # Landscape for chart
                 self._create_balance_chart(fig, account_histories, start_date, end_date, month)

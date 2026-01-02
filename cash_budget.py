@@ -214,6 +214,11 @@ async def run_cash_budget(month: str = None, save: bool = False, pdf: bool = Fal
 
         console.print(f"[green]✓[/green] Fetched history for {len(account_histories)} accounts")
 
+        # Get transfer transactions (excluded from expense metrics)
+        transfers = analyzer.get_transfer_transactions(start_date, end_date)
+        if not transfers.empty:
+            console.print(f"[dim]Found {len(transfers)} transfer transactions (${transfers['amount'].sum():,.2f})[/dim]")
+
         # Generate PDF
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -231,7 +236,8 @@ async def run_cash_budget(month: str = None, save: bool = False, pdf: bool = Fal
             account_histories=account_histories,
             start_date=start_date,
             end_date=end_date,
-            month=month_str
+            month=month_str,
+            transfers_df=transfers
         )
         console.print(f"[green]✓[/green] PDF saved to: {pdf_filepath}")
 

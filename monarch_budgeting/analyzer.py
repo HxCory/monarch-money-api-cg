@@ -553,8 +553,13 @@ class CashBudgetAnalyzer:
         income_df = income_df[~income_df['category_name'].apply(self._is_excluded_category)]
         total_income = income_df['amount'].sum()
 
-        # All expenses: negative amounts (excluding CC payment category)
+        # All expenses: negative amounts (excluding CC payments and transfers)
         expense_df = df[(df['amount'] < 0) & (~df['is_cc_payment'])]
+        # Filter out transfer-type categories
+        expense_df = expense_df[expense_df['category_id'].apply(
+            lambda cid: self.categories.get(cid) is None or
+                       self.categories.get(cid).category_type.value != 'transfer'
+        )]
         total_expenses = abs(expense_df['amount'].sum())
 
         # CC expenses: negative amounts on CC accounts
@@ -703,3 +708,59 @@ class CashBudgetAnalyzer:
                     expenses = pd.concat([expenses, cc_payment_row], ignore_index=True)
 
         return expenses
+
+    def get_transfer_transactions(self,
+                                   start_date: Optional[datetime] = None,
+                                   end_date: Optional[datetime] = None) -> pd.DataFrame:
+        """
+        Get transfer-type transactions (excluded from expense metrics).
+
+        These are transactions categorized as 'transfer' type (Venmo, PayPal,
+        internal transfers, investments, etc.)
+
+        Returns DataFrame with columns:
+        - date, description, amount, account_name, category_name, is_cc
+        """
+        df = self._prepare_dataframe()
+
+        if df.empty:
+            return pd.DataFrame(columns=[
+                'date', 'description', 'amount', 'account_name', 'category_name', 'is_cc'
+            ])
+
+        # Filter by date range
+        if start_date:
+            df = df[df['date'] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df['date'] <= pd.to_datetime(end_date)]
+
+        # Only negative amounts (outflows), excluding CC payments
+        df = df[(df['amount'] < 0) & (~df['is_cc_payment'])]
+
+        # Find transfer-type transactions
+        transfers = []
+        for _, row in df.iterrows():
+            cat_id = row.get('category_id')
+            cat = self.categories.get(cat_id) if cat_id else None
+
+            # Include if category is transfer type
+            if cat and cat.category_type.value == 'transfer':
+                account = row.get('account', {})
+                account_name = account.get('displayName', 'Unknown') if isinstance(account, dict) else 'Unknown'
+
+                transfers.append({
+                    'date': row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else str(row['date']),
+                    'description': row.get('name', row.get('originalName', 'Unknown')),
+                    'amount': abs(row['amount']),  # Show as positive
+                    'account_name': account_name,
+                    'category_name': cat.name,
+                    'is_cc': row.get('is_cc_account', False)
+                })
+
+        result_df = pd.DataFrame(transfers)
+
+        # Sort by amount descending
+        if not result_df.empty:
+            result_df = result_df.sort_values('amount', ascending=False)
+
+        return result_df
