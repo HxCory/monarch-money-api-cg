@@ -106,12 +106,36 @@ python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
 
 **Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Implemented custom GraphQL query that works.
 
+### ✅ Completed - Debt Payoff Projections
+
+**Branch**: `feature/add-debt-reduction-vis`
+
+**Goal**: Show how quickly debt can be paid off at different allocation percentages.
+
+**Usage**:
+```bash
+python debt_payoff.py                         # CC debt, current month
+python debt_payoff.py --type loan             # Loan debt
+python debt_payoff.py --type cc --month 2026-01
+python debt_payoff.py --use-local-budget      # Use custom_budget.json
+```
+
+**Features**:
+- [x] Credit card and loan debt types
+- [x] Configurable interest rates via `debt_config.json`
+- [x] Multiple allocation percentages (25%, 35%, 50%, 60%, 65%, 70%, 75%)
+- [x] For loans: base payment from budget + additional allocation
+- [x] Payoff timeline plots saved to `output/`
+- [x] Custom budget override support (`--use-local-budget`)
+
+**Configuration**:
+- `debt_config.json`: Interest rates, payoff percentages, loan category name
+- `custom_budget.json`: Override Monarch budgets with local values
+- Example files provided (`.example.json`), gitignored for privacy
+
 ### 📋 Future Steps
-1. Add user-defined budget targets (JSON config)
-2. Add export functionality (CSV/Excel)
-3. Consider payoff projections
-4. Multi-month trend analysis
-5. Budget vs actual comparison reports
+1. Multi-month trend analysis
+2. Budget vs actual comparison reports
 
 ## Quick Start
 

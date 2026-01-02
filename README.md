@@ -26,9 +26,9 @@ Monarch Money is great, but tracking credit card debt payoff can be tricky. This
 ✅ **Cash-based budget view** - See TRUE CASH REMAINING (income - cash expenses - CC payments)
 ✅ **Budget forecast** - Project expected end-of-month cash based on budget
 ✅ **PDF reports** - Generate professional PDF reports with charts
+✅ **Debt payoff projections** - See how fast you can pay off CC debt and loans at different allocation rates
+✅ **Custom budget overrides** - Use a local JSON file to override Monarch budgets
 ✅ Text-based reporting with Rich terminal tables
-🔄 Payoff projections (coming soon)
-🔄 Export to CSV/Excel (coming soon)
 
 ## Installation
 
@@ -121,6 +121,21 @@ The session is saved to `.mm/mm_session.pickle` and reused for future runs.
 
 After your first successful login, the `monarchmoney` library will save a session token in `.mm/`. You won't need to provide credentials again until the session expires!
 
+### Configuration Files
+
+For debt payoff projections and custom budgets, copy the example files:
+
+```bash
+cp debt_config.example.json debt_config.json
+cp custom_budget.example.json custom_budget.json
+```
+
+Then edit with your actual values:
+- **debt_config.json**: Interest rates, allocation percentages, loan category name
+- **custom_budget.json**: Override Monarch budgets with local values
+
+These files are gitignored to keep your personal data private.
+
 ## Usage
 
 ### Quick Start
@@ -166,10 +181,26 @@ Shows TRUE CASH REMAINING = Income - Cash Expenses - CC Payments
 python budget_forecast.py                     # Current month
 python budget_forecast.py --month 2026-01     # Specific month
 python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
+python budget_forecast.py --use-local-budget  # Use custom_budget.json
 ```
 
 Shows expected end-of-month cash based on your Monarch budget:
 - Starting Cash + Expected Income - Expected Expenses = Expected End Cash
+
+**Option 5: Debt Payoff Projections**:
+
+```bash
+python debt_payoff.py                         # CC debt, current month
+python debt_payoff.py --type loan             # Loan debt
+python debt_payoff.py --type cc --month 2026-01
+python debt_payoff.py --use-local-budget      # Use custom_budget.json
+```
+
+Shows how quickly you can pay off debt at different allocation percentages (25%, 35%, 50%, 60%, 65%, 70%, 75%) of your monthly surplus:
+- **Credit Cards**: 24% APR assumed
+- **Loans**: 12.71% APR, uses "Loan Repayment" budget category as base payment
+
+Generates payoff timeline plots saved to `output/`.
 
 ### Example Output
 
@@ -221,12 +252,17 @@ monarch-money-api-cg/
 │   ├── budget_data.py         # Budget data structures
 │   ├── budget_display.py      # Rich terminal display
 │   ├── budget_pdf.py          # PDF report generation
+│   ├── utils.py               # Shared utilities
 │   └── main.py                # Main CLI entry point
 ├── output/                    # Generated reports (gitignored)
 │   ├── cash_budget_YYYYMM.pdf # Cash budget PDF reports
-│   └── budget_forecast_YYYY-MM.pdf  # Forecast PDF reports
+│   ├── budget_forecast_YYYY-MM.pdf  # Forecast PDF reports
+│   └── cc_payoff_YYYY-MM.png  # Debt payoff projection plots
 ├── cash_budget.py            # Cash-based budget CLI
 ├── budget_forecast.py        # Budget forecast CLI
+├── debt_payoff.py            # Debt payoff projections CLI
+├── debt_config.example.json  # Example config for debt payoff
+├── custom_budget.example.json # Example custom budget override
 ├── example.py                # Credit card analysis example
 ├── demo_plot.py              # Demo with test data (no auth required)
 ├── requirements.txt           # Python dependencies
@@ -351,11 +387,10 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Budget forecast (expected end-of-month cash)
 - [x] PDF report generation
 - [x] Category-level breakdowns
-- [ ] Debt payoff projections
-- [ ] CSV/Excel export
-- [ ] Interactive dashboards
-- [ ] Budget vs. actual comparisons
+- [x] Debt payoff projections (CC and loans with configurable interest rates)
+- [x] Custom budget overrides (local JSON files)
 - [ ] Multi-month trend analysis
+- [ ] Budget vs. actual comparisons
 
 ## Tech Stack
 

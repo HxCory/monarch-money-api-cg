@@ -2,8 +2,13 @@
 Shared utilities for Monarch Money budgeting tools.
 """
 
+import json
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Any
+from pathlib import Path
+from typing import Tuple, Dict, Any, Optional
+
+# Default path for custom budget file
+DEFAULT_CUSTOM_BUDGET_PATH = Path("custom_budget.json")
 
 
 def format_currency(amount: float, show_sign: bool = False) -> str:
@@ -113,3 +118,52 @@ def parse_budget_totals(budget_data: Dict[str, Any]) -> Dict[str, float]:
         result['total_expenses'] = totals[0].get('totalExpenses', {}).get('plannedAmount', 0)
 
     return result
+
+
+def load_custom_budget(filepath: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Load custom budget from a JSON file.
+
+    Args:
+        filepath: Path to the JSON file. Defaults to custom_budget.json in current directory.
+
+    Returns:
+        Dict with budget data including:
+        - total_income: Total expected income
+        - total_expenses: Total expected expenses
+        - income_categories: List of income category dicts with 'name', 'group', 'amount'
+        - expense_categories: List of expense category dicts with 'name', 'group', 'amount'
+
+    Raises:
+        FileNotFoundError: If the budget file doesn't exist
+        json.JSONDecodeError: If the file is not valid JSON
+    """
+    if filepath is None:
+        filepath = DEFAULT_CUSTOM_BUDGET_PATH
+
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+
+def get_custom_budget_category_amount(budget: Dict[str, Any], category_name: str) -> float:
+    """
+    Get the amount for a specific category from custom budget data.
+
+    Args:
+        budget: Custom budget data loaded from JSON
+        category_name: Name of the category to find (e.g., "Loan Repayment")
+
+    Returns:
+        Amount for the category, or 0 if not found
+    """
+    # Check expense categories
+    for cat in budget.get('expense_categories', []):
+        if cat.get('name', '').lower() == category_name.lower():
+            return cat.get('amount', 0)
+
+    # Check income categories
+    for cat in budget.get('income_categories', []):
+        if cat.get('name', '').lower() == category_name.lower():
+            return cat.get('amount', 0)
+
+    return 0

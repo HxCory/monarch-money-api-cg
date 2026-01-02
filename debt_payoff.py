@@ -14,10 +14,12 @@ Usage:
     python debt_payoff.py --type loan            # Loan debt, current month
     python debt_payoff.py --type cc --month 2026-01
     python debt_payoff.py --type loan --month 2026-01
+    python debt_payoff.py --use-local-budget     # Use custom_budget.json
 """
 
 import argparse
 import asyncio
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List
@@ -34,17 +36,24 @@ from monarch_budgeting.utils import (
     format_currency,
     parse_month,
     get_current_month_range,
+    load_custom_budget,
+    get_custom_budget_category_amount,
 )
 
 
-# Payoff allocation percentages to model
-PAYOFF_PERCENTAGES = [0.25, 0.35, 0.50, 0.60, 0.65, 0.70, 0.75]
+# Config file path
+DEBT_CONFIG_PATH = Path("debt_config.json")
 
-# Interest rates by debt type
-INTEREST_RATES = {
-    'cc': 0.24,      # 24% APR for credit cards
-    'loan': 0.1271,  # 12.71% APR for loans
-}
+
+def load_debt_config() -> Dict[str, Any]:
+    """Load debt configuration from JSON file."""
+    if not DEBT_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"debt_config.json not found. Copy debt_config.example.json to debt_config.json "
+            f"and update with your interest rates."
+        )
+    with open(DEBT_CONFIG_PATH, 'r') as f:
+        return json.load(f)
 
 # Account type names in Monarch API
 ACCOUNT_TYPES = {
@@ -115,7 +124,9 @@ def generate_payoff_plot(
     monthly_surplus: float,
     base_payment: float,
     start_date: datetime,
-    debt_type: str
+    debt_type: str,
+    annual_rate: float,
+    payoff_percentages: List[float]
 ):
     """
     Generate a plot showing debt payoff projections at different allocation rates.
@@ -127,18 +138,20 @@ def generate_payoff_plot(
         base_payment: Base monthly payment (0 for CC, budgeted amount for loans)
         start_date: Starting month for projections
         debt_type: 'cc' or 'loan'
+        annual_rate: Annual interest rate (e.g., 0.24 for 24%)
+        payoff_percentages: List of allocation percentages to model
     """
-    annual_rate = INTEREST_RATES[debt_type]
     monthly_rate = annual_rate / 12
     type_name = DEBT_TYPE_NAMES[debt_type]
 
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    # Colors for different percentages
-    colors = ['#e74c3c', '#c0392b', '#e67e22', '#f39c12', '#27ae60', '#2980b9', '#8e44ad']
+    # Colors for different percentages (cycle if more than 7)
+    base_colors = ['#e74c3c', '#c0392b', '#e67e22', '#f39c12', '#27ae60', '#2980b9', '#8e44ad']
+    colors = base_colors * ((len(payoff_percentages) // len(base_colors)) + 1)
 
-    for i, pct in enumerate(PAYOFF_PERCENTAGES):
+    for i, pct in enumerate(payoff_percentages):
         additional_payment = monthly_surplus * pct
         total_payment = base_payment + additional_payment
         result = project_payoff(total_debt, total_payment, annual_rate)
@@ -220,10 +233,11 @@ def display_summary(
     monthly_surplus: float,
     base_payment: float,
     start_date: datetime,
-    debt_type: str
+    debt_type: str,
+    annual_rate: float,
+    payoff_percentages: List[float]
 ):
     """Display payoff projections in terminal."""
-    annual_rate = INTEREST_RATES[debt_type]
     monthly_rate = annual_rate / 12
     type_name = DEBT_TYPE_NAMES[debt_type]
 
@@ -253,7 +267,7 @@ def display_summary(
     table.add_column("Payoff Date", justify="right")
     table.add_column("Total Interest", justify="right", style="red")
 
-    for pct in PAYOFF_PERCENTAGES:
+    for pct in payoff_percentages:
         additional_payment = monthly_surplus * pct
         total_payment = base_payment + additional_payment
         result = project_payoff(total_debt, total_payment, annual_rate)
@@ -360,14 +374,29 @@ def parse_budget_totals(budget_data: Dict[str, Any]) -> Dict[str, float]:
     return result
 
 
-async def run_debt_payoff(month: str = None, debt_type: str = 'cc'):
+async def run_debt_payoff(month: str = None, debt_type: str = 'cc', use_local_budget: bool = False):
     """Run the debt payoff projection analysis."""
     console = Console()
     type_name = DEBT_TYPE_NAMES[debt_type]
     account_type = ACCOUNT_TYPES[debt_type]
 
+    # Load config
+    try:
+        config = load_debt_config()
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return
+
+    interest_rates = config.get('interest_rates', {})
+    payoff_percentages = config.get('payoff_percentages', [0.25, 0.50, 0.75])
+    loan_budget_category = config.get('loan_budget_category', 'Loan Repayment')
+    annual_rate = interest_rates.get(debt_type, 0.10)
+
     console.print()
-    console.print(f"[bold]{type_name} Debt Payoff Projection[/bold]")
+    if use_local_budget:
+        console.print(f"[bold]{type_name} Debt Payoff Projection[/bold] [dim](using local budget)[/dim]")
+    else:
+        console.print(f"[bold]{type_name} Debt Payoff Projection[/bold]")
     console.print()
 
     # Parse month or use current month
@@ -416,13 +445,25 @@ async def run_debt_payoff(month: str = None, debt_type: str = 'cc'):
     starting_cash = await get_starting_cash(client, start_date)
     console.print(f"[green]✓[/green] Starting cash: {format_currency(starting_cash)}")
 
-    # Get budget data
-    console.print("[dim]Fetching budget data...[/dim]")
-    budget_data = await client.get_budget_data(month_key)
-    budget = parse_budget_totals(budget_data)
+    # Get budget data - either from API or local file
+    if use_local_budget:
+        console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
+        try:
+            custom_budget = load_custom_budget()
+            expected_income = custom_budget.get('total_income', 0)
+            expected_expenses = custom_budget.get('total_expenses', 0)
+            console.print(f"[green]✓[/green] Loaded custom budget")
+        except FileNotFoundError:
+            console.print("[red]Error: custom_budget.json not found![/red]")
+            console.print("[dim]Create the file or run without --use-local-budget[/dim]")
+            return
+    else:
+        console.print("[dim]Fetching budget data...[/dim]")
+        budget_data = await client.get_budget_data(month_key)
+        budget = parse_budget_totals(budget_data)
+        expected_income = budget['total_income']
+        expected_expenses = budget['total_expenses']
 
-    expected_income = budget['total_income']
-    expected_expenses = budget['total_expenses']
     monthly_surplus = starting_cash + expected_income - expected_expenses
 
     console.print(f"[green]✓[/green] Expected income: {format_currency(expected_income)}")
@@ -432,8 +473,11 @@ async def run_debt_payoff(month: str = None, debt_type: str = 'cc'):
     # For loans, get the base payment from budget
     base_payment = 0
     if debt_type == 'loan':
-        base_payment = get_budget_category_amount(budget_data, 'Loan Repayment')
-        console.print(f"[green]✓[/green] Loan Repayment budget: {format_currency(base_payment)}/month")
+        if use_local_budget:
+            base_payment = get_custom_budget_category_amount(custom_budget, loan_budget_category)
+        else:
+            base_payment = get_budget_category_amount(budget_data, loan_budget_category)
+        console.print(f"[green]✓[/green] {loan_budget_category} budget: {format_currency(base_payment)}/month")
 
     console.print()
 
@@ -450,17 +494,22 @@ async def run_debt_payoff(month: str = None, debt_type: str = 'cc'):
         return
 
     # Display summary
-    display_summary(console, total_debt, monthly_surplus, base_payment, start_date, debt_type)
+    display_summary(console, total_debt, monthly_surplus, base_payment, start_date, debt_type,
+                    annual_rate, payoff_percentages)
 
     # Generate plot
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
-    plot_filename = f"{debt_type}_payoff_{month_key}.png"
+    if use_local_budget:
+        plot_filename = f"{debt_type}_payoff_custom_{month_key}.png"
+    else:
+        plot_filename = f"{debt_type}_payoff_{month_key}.png"
     plot_filepath = output_dir / plot_filename
 
     console.print()
     console.print("[dim]Generating payoff projection plot...[/dim]")
-    generate_payoff_plot(str(plot_filepath), total_debt, monthly_surplus, base_payment, start_date, debt_type)
+    generate_payoff_plot(str(plot_filepath), total_debt, monthly_surplus, base_payment, start_date, debt_type,
+                         annual_rate, payoff_percentages)
     console.print(f"[green]✓[/green] Plot saved to: {plot_filepath}")
 
 
@@ -478,11 +527,16 @@ def main():
         "--month", "-m",
         help="Month for budget forecast in YYYY-MM format (default: current month)"
     )
+    parser.add_argument(
+        "--use-local-budget", "-l",
+        action="store_true",
+        help="Use custom_budget.json instead of fetching from Monarch Money"
+    )
 
     args = parser.parse_args()
 
     try:
-        asyncio.run(run_debt_payoff(month=args.month, debt_type=args.type))
+        asyncio.run(run_debt_payoff(month=args.month, debt_type=args.type, use_local_budget=args.use_local_budget))
     except KeyboardInterrupt:
         print("\nCancelled.")
     except Exception as e:

@@ -1,0 +1,34 @@
+{
+  "month": "2026-01",
+  "total_income": 1000.0,
+  "total_expenses": 800.0,
+  "income_categories": [
+    {
+      "name": "Paychecks",
+      "group": "Income",
+      "amount": 1000.0
+    }
+  ],
+  "expense_categories": [
+    {
+      "name": "Rent",
+      "group": "Housing",
+      "amount": 500.0
+    },
+    {
+      "name": "Loan Repayment",
+      "group": "Financial",
+      "amount": 100.0
+    },
+    {
+      "name": "Groceries",
+      "group": "Food & Dining",
+      "amount": 100.0
+    },
+    {
+      "name": "Utilities",
+      "group": "Bills & Utilities",
+      "amount": 100.0
+    }
+  ]
+}
