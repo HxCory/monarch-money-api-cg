@@ -548,23 +548,34 @@ class CashBudgetAnalyzer:
         if end_date:
             df = df[df['date'] <= pd.to_datetime(end_date)]
 
+        # Helper to safely sum amounts from potentially empty DataFrame
+        def safe_sum(filtered_df: pd.DataFrame) -> float:
+            if filtered_df.empty or 'amount' not in filtered_df.columns:
+                return 0.0
+            return filtered_df['amount'].sum()
+
         # Income: positive amounts (excluding CC payments and excluded categories)
         income_df = df[(df['amount'] > 0) & (~df['is_cc_payment'])]
-        income_df = income_df[~income_df['category_name'].apply(self._is_excluded_category)]
-        total_income = income_df['amount'].sum()
+        if not income_df.empty:
+            income_df = income_df[~income_df['category_name'].apply(self._is_excluded_category)]
+        total_income = safe_sum(income_df)
 
         # All expenses: negative amounts (excluding CC payments and transfers)
         expense_df = df[(df['amount'] < 0) & (~df['is_cc_payment'])]
         # Filter out transfer-type categories
-        expense_df = expense_df[expense_df['category_id'].apply(
-            lambda cid: self.categories.get(cid) is None or
-                       self.categories.get(cid).category_type.value != 'transfer'
-        )]
-        total_expenses = abs(expense_df['amount'].sum())
+        if not expense_df.empty:
+            expense_df = expense_df[expense_df['category_id'].apply(
+                lambda cid: self.categories.get(cid) is None or
+                           self.categories.get(cid).category_type.value != 'transfer'
+            )]
+        total_expenses = abs(safe_sum(expense_df))
 
         # CC expenses: negative amounts on CC accounts
-        cc_expense_df = expense_df[expense_df['is_cc_account']]
-        cc_expenses = abs(cc_expense_df['amount'].sum())
+        if not expense_df.empty and 'is_cc_account' in expense_df.columns:
+            cc_expense_df = expense_df[expense_df['is_cc_account']]
+            cc_expenses = abs(safe_sum(cc_expense_df))
+        else:
+            cc_expenses = 0.0
 
         # Cash expenses: negative amounts NOT on CC accounts
         cash_expenses = total_expenses - cc_expenses
@@ -573,7 +584,7 @@ class CashBudgetAnalyzer:
         # These show as negative from checking (paying) and positive on CC (receiving)
         # We want the outflow from non-CC accounts
         cc_payment_df = df[df['is_cc_payment'] & ~df['is_cc_account'] & (df['amount'] < 0)]
-        cc_payments = abs(cc_payment_df['amount'].sum())
+        cc_payments = abs(safe_sum(cc_payment_df))
 
         # True Cash Remaining = Income - Cash Expenses - CC Payments
         true_cash_remaining = total_income - cash_expenses - cc_payments
@@ -693,7 +704,7 @@ class CashBudgetAnalyzer:
 
                 # CC Payments: outflows from non-CC accounts in CC payment category
                 cc_payment_df = df[df['is_cc_payment'] & ~df['is_cc_account'] & (df['amount'] < 0)]
-                cc_payments = abs(cc_payment_df['amount'].sum())
+                cc_payments = abs(cc_payment_df['amount'].sum()) if not cc_payment_df.empty else 0.0
 
                 if cc_payments > 0:
                     cc_payment_row = pd.DataFrame([{
