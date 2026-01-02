@@ -5,7 +5,7 @@ Shared utilities for Monarch Money budgeting tools.
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 # Default path for custom budget file
 DEFAULT_CUSTOM_BUDGET_PATH = Path("custom_budget.json")
@@ -167,3 +167,64 @@ def get_custom_budget_category_amount(budget: Dict[str, Any], category_name: str
             return cat.get('amount', 0)
 
     return 0
+
+
+# Per-month budget file storage
+BUDGETS_DIR = Path("budgets")
+
+
+def get_budget_path(month: str) -> Path:
+    """
+    Get path for a month's budget file.
+
+    Args:
+        month: Month in YYYY-MM format (e.g., "2026-01")
+
+    Returns:
+        Path to the budget file (e.g., budgets/2026-01.json)
+    """
+    BUDGETS_DIR.mkdir(exist_ok=True)
+    return BUDGETS_DIR / f"{month}.json"
+
+
+def load_month_budget(month: str) -> Optional[Dict[str, Any]]:
+    """
+    Load budget for a specific month.
+
+    Args:
+        month: Month in YYYY-MM format (e.g., "2026-01")
+
+    Returns:
+        Dict with budget data, or None if no budget exists for this month
+    """
+    path = get_budget_path(month)
+    if path.exists():
+        with open(path, 'r') as f:
+            return json.load(f)
+    return None
+
+
+def save_month_budget(month: str, budget: Dict[str, Any]) -> None:
+    """
+    Save budget for a specific month.
+
+    Args:
+        month: Month in YYYY-MM format (e.g., "2026-01")
+        budget: Budget data to save
+    """
+    path = get_budget_path(month)
+    budget['month'] = month
+    with open(path, 'w') as f:
+        json.dump(budget, f, indent=2)
+
+
+def list_available_budgets() -> List[str]:
+    """
+    List all months that have budget files.
+
+    Returns:
+        Sorted list of month strings (e.g., ["2025-12", "2026-01"])
+    """
+    if not BUDGETS_DIR.exists():
+        return []
+    return sorted([f.stem for f in BUDGETS_DIR.glob("*.json")])

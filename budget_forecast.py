@@ -32,6 +32,7 @@ from monarch_budgeting.utils import (
     parse_month,
     get_current_month_range,
     load_custom_budget,
+    load_month_budget,
 )
 
 
@@ -294,16 +295,24 @@ async def run_forecast(month: str = None, pdf: bool = False, use_local_budget: b
 
     # Get budget data - either from API or local file
     if use_local_budget:
-        console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
-        try:
-            custom_budget = load_custom_budget()
-            budget = convert_custom_budget(custom_budget)
-            console.print(f"[green]✓[/green] Loaded custom budget: {len(budget['income_categories'])} income, "
+        # Try month-specific budget first, then fall back to custom_budget.json
+        month_budget = load_month_budget(month_key)
+        if month_budget:
+            console.print(f"[dim]Loading budget from budgets/{month_key}.json...[/dim]")
+            budget = convert_custom_budget(month_budget)
+            console.print(f"[green]✓[/green] Loaded month budget: {len(budget['income_categories'])} income, "
                           f"{len(budget['expense_categories'])} expense categories")
-        except FileNotFoundError:
-            console.print("[red]Error: custom_budget.json not found![/red]")
-            console.print("[dim]Create the file or run without --use-local-budget[/dim]")
-            return
+        else:
+            console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
+            try:
+                custom_budget = load_custom_budget()
+                budget = convert_custom_budget(custom_budget)
+                console.print(f"[green]✓[/green] Loaded custom budget: {len(budget['income_categories'])} income, "
+                              f"{len(budget['expense_categories'])} expense categories")
+            except FileNotFoundError:
+                console.print("[red]Error: No budget found![/red]")
+                console.print(f"[dim]Create budgets/{month_key}.json or custom_budget.json[/dim]")
+                return
     else:
         console.print("[dim]Fetching budget data...[/dim]")
         budget_data = await client.get_budget_data(month_key)
