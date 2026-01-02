@@ -18,7 +18,6 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
-import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -27,26 +26,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 from monarch_budgeting.client import MonarchClient
-
-
-def parse_month(month_str: str) -> tuple[datetime, datetime]:
-    """Parse month string (YYYY-MM) into start and end dates."""
-    try:
-        year, month = map(int, month_str.split('-'))
-        start = datetime(year, month, 1)
-
-        # Get last day of month
-        if month == 12:
-            end = datetime(year + 1, 1, 1)
-        else:
-            end = datetime(year, month + 1, 1)
-
-        from datetime import timedelta
-        end = end - timedelta(days=1)
-
-        return start, end
-    except (ValueError, AttributeError):
-        raise ValueError(f"Invalid month format: {month_str}. Use YYYY-MM (e.g., 2026-01)")
+from monarch_budgeting.utils import format_currency, parse_month, get_current_month_range
 
 
 def parse_budget_data(budget_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,13 +68,6 @@ def parse_budget_data(budget_data: Dict[str, Any]) -> Dict[str, Any]:
     result['expense_categories'].sort(key=lambda x: x['planned'], reverse=True)
 
     return result
-
-
-def format_currency(amount: float) -> str:
-    """Format a number as currency."""
-    if amount < 0:
-        return f"-${abs(amount):,.2f}"
-    return f"${amount:,.2f}"
 
 
 def generate_forecast_pdf(filepath: str, budget: Dict[str, Any],
@@ -256,14 +229,7 @@ async def run_forecast(month: str = None, pdf: bool = False):
     if month:
         start_date, end_date = parse_month(month)
     else:
-        today = datetime.now()
-        start_date = datetime(today.year, today.month, 1)
-        if today.month == 12:
-            end_date = datetime(today.year + 1, 1, 1)
-        else:
-            end_date = datetime(today.year, today.month + 1, 1)
-        from datetime import timedelta
-        end_date = end_date - timedelta(days=1)
+        start_date, end_date = get_current_month_range()
 
     month_str = start_date.strftime("%B %Y")
     month_key = start_date.strftime("%Y-%m")

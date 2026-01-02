@@ -23,26 +23,7 @@ from monarch_budgeting.analyzer import CashBudgetAnalyzer
 from monarch_budgeting.budget_data import parse_categories
 from monarch_budgeting.budget_display import BudgetDisplay
 from monarch_budgeting.budget_pdf import BudgetPDFReport
-
-
-def parse_month(month_str: str) -> tuple[datetime, datetime]:
-    """Parse month string (YYYY-MM) into start and end dates."""
-    try:
-        year, month = map(int, month_str.split('-'))
-        start = datetime(year, month, 1)
-
-        # Get last day of month
-        if month == 12:
-            end = datetime(year + 1, 1, 1)
-        else:
-            end = datetime(year, month + 1, 1)
-
-        from datetime import timedelta
-        end = end - timedelta(days=1)
-
-        return start, end
-    except (ValueError, AttributeError):
-        raise ValueError(f"Invalid month format: {month_str}. Use YYYY-MM (e.g., 2025-12)")
+from monarch_budgeting.utils import parse_month, get_previous_month_range
 
 
 async def fetch_categories(client: MonarchClient) -> dict:
@@ -106,19 +87,7 @@ async def run_cash_budget(month: str = None, save: bool = False, pdf: bool = Fal
     if month:
         start_date, end_date = parse_month(month)
     else:
-        # Default to previous month
-        today = datetime.now()
-        if today.month == 1:
-            start_date = datetime(today.year - 1, 12, 1)
-            end_date = datetime(today.year - 1, 12, 31)
-        else:
-            start_date = datetime(today.year, today.month - 1, 1)
-            if today.month == 2:
-                end_date = datetime(today.year, today.month, 1)
-            else:
-                end_date = datetime(today.year, today.month, 1)
-            from datetime import timedelta
-            end_date = end_date - timedelta(days=1)
+        start_date, end_date = get_previous_month_range()
 
     month_str = start_date.strftime("%B %Y")
     console.print(f"[dim]Analyzing: {month_str}[/dim]")
