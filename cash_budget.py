@@ -49,6 +49,48 @@ async def fetch_categories(client: MonarchClient) -> dict:
     return parse_categories(raw_categories)
 
 
+def parse_cash_balances(snapshots: dict, start_date: datetime, end_date: datetime) -> dict:
+    """
+    Parse cash balance snapshots to get month start and end balances.
+
+    Args:
+        snapshots: API response from get_aggregate_snapshots
+        start_date: First day of month
+        end_date: Last day of month
+
+    Returns:
+        Dict with 'start_balance', 'end_balance', 'start_date', 'end_date'
+    """
+    # Extract the aggregateSnapshots list
+    snapshot_list = snapshots.get('aggregateSnapshots', [])
+
+    if not snapshot_list:
+        return {
+            'start_balance': None,
+            'end_balance': None,
+            'start_date': start_date,
+            'end_date': end_date
+        }
+
+    # Sort by date
+    sorted_snapshots = sorted(snapshot_list, key=lambda x: x.get('date', ''))
+
+    # Get first and last balance
+    start_balance = sorted_snapshots[0].get('balance') if sorted_snapshots else None
+    end_balance = sorted_snapshots[-1].get('balance') if sorted_snapshots else None
+
+    # Get actual dates from snapshots
+    actual_start = sorted_snapshots[0].get('date') if sorted_snapshots else None
+    actual_end = sorted_snapshots[-1].get('date') if sorted_snapshots else None
+
+    return {
+        'start_balance': start_balance,
+        'end_balance': end_balance,
+        'start_date': actual_start or start_date.strftime('%Y-%m-%d'),
+        'end_date': actual_end or end_date.strftime('%Y-%m-%d')
+    }
+
+
 async def run_cash_budget(month: str = None, save: bool = False):
     """Run the cash budget analysis."""
     display = BudgetDisplay()
@@ -106,6 +148,17 @@ async def run_cash_budget(month: str = None, save: bool = False):
     console.print(f"[green]✓[/green] Found {len(transactions)} transactions")
     console.print()
 
+    # Fetch cash balance snapshots for the month
+    console.print(f"[dim]Fetching cash balance snapshots...[/dim]")
+    snapshots = await client.get_aggregate_snapshots(
+        start_date=start_date,
+        end_date=end_date,
+        account_type='depository'  # Cash/checking/savings accounts
+    )
+    cash_balances = parse_cash_balances(snapshots, start_date, end_date)
+    console.print(f"[green]✓[/green] Got balance snapshots")
+    console.print()
+
     # Analyze
     analyzer = CashBudgetAnalyzer(transactions, accounts, categories)
     metrics = analyzer.calculate_top_level_metrics()
@@ -113,7 +166,7 @@ async def run_cash_budget(month: str = None, save: bool = False):
     expenses = analyzer.get_expense_breakdown()
 
     # Display
-    display.display_full_budget(metrics, income, expenses, month=month_str)
+    display.display_full_budget(metrics, income, expenses, cash_balances, month=month_str)
 
     # Save if requested
     if save:
@@ -128,7 +181,7 @@ async def run_cash_budget(month: str = None, save: bool = False):
             file_console = Console(file=f, force_terminal=True, width=100)
             file_display = BudgetDisplay()
             file_display.console = file_console
-            file_display.display_full_budget(metrics, income, expenses, month=month_str)
+            file_display.display_full_budget(metrics, income, expenses, cash_balances, month=month_str)
 
         console.print(f"[green]✓[/green] Saved to: {filepath}")
 

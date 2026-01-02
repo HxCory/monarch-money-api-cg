@@ -63,7 +63,21 @@ class MonarchClient:
         self._email = email or os.environ.get('MONARCH_EMAIL')
         self._password = password or os.environ.get('MONARCH_PASSWORD')
 
-        await self._do_login(self._email, self._password, use_saved_session, mfa_secret_key, prompt_for_mfa)
+        if use_saved_session:
+            # First, try to use saved session WITHOUT passing credentials
+            # This prevents the library from attempting a fresh login
+            try:
+                await self.mm.login(use_saved_session=True)
+                self._authenticated = True
+                return True
+            except Exception:
+                # Session doesn't exist or is invalid, fall through to credential login
+                pass
+
+        # No valid session, need to login with credentials
+        await self._do_login(self._email, self._password,
+                            use_saved_session=False, mfa_secret_key=mfa_secret_key,
+                            prompt_for_mfa=prompt_for_mfa)
         self._authenticated = True
         return True
 
@@ -161,3 +175,28 @@ class MonarchClient:
         if not self._authenticated:
             raise RuntimeError("Must login first")
         return await self._api_call_with_retry(self.mm.get_transaction_categories)
+
+    async def get_aggregate_snapshots(self,
+                                      start_date: Optional[datetime] = None,
+                                      end_date: Optional[datetime] = None,
+                                      account_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get daily aggregate account snapshots.
+
+        Args:
+            start_date: Start date for snapshots
+            end_date: End date for snapshots
+            account_type: Filter by account type (e.g., 'depository' for cash accounts)
+
+        Returns:
+            Dictionary with snapshot data
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        return await self._api_call_with_retry(
+            self.mm.get_aggregate_snapshots,
+            start_date=start_date.strftime('%Y-%m-%d') if start_date else None,
+            end_date=end_date.strftime('%Y-%m-%d') if end_date else None,
+            account_type=account_type
+        )

@@ -5,7 +5,7 @@ This module provides beautiful terminal output using the `rich` library
 to display budget metrics and category breakdowns.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
@@ -185,10 +185,54 @@ class BudgetDisplay:
         self.console.print(table)
         self.console.print()
 
+    def display_cash_balances(self, cash_balances: Dict[str, Any]):
+        """
+        Display cash account balance at start and end of month.
+
+        Args:
+            cash_balances: Dict with start_balance, end_balance, start_date, end_date
+        """
+        start_bal = cash_balances.get('start_balance')
+        end_bal = cash_balances.get('end_balance')
+
+        if start_bal is None and end_bal is None:
+            return
+
+        table = Table(
+            title="Cash Account Balances",
+            box=box.ROUNDED,
+            title_style="bold cyan",
+            header_style="bold"
+        )
+
+        table.add_column("Date", style="cyan")
+        table.add_column("Balance", justify="right")
+
+        if start_bal is not None:
+            start_date = cash_balances.get('start_date', '')
+            table.add_row(f"Start ({start_date})", self._format_currency(start_bal))
+
+        if end_bal is not None:
+            end_date = cash_balances.get('end_date', '')
+            table.add_row(f"End ({end_date})", self._format_currency(end_bal))
+
+        # Show change if both values exist
+        if start_bal is not None and end_bal is not None:
+            change = end_bal - start_bal
+            change_color = self._color_amount(change)
+            table.add_row(
+                "[bold]Change[/bold]",
+                f"[bold {change_color}]{self._format_currency(change, show_sign=True)}[/bold {change_color}]"
+            )
+
+        self.console.print(table)
+        self.console.print()
+
     def display_full_budget(self,
                            metrics: Dict[str, float],
                            income_df: pd.DataFrame,
                            expense_df: pd.DataFrame,
+                           cash_balances: Optional[Dict[str, Any]] = None,
                            month: str = ""):
         """
         Display the complete budget view.
@@ -197,6 +241,7 @@ class BudgetDisplay:
             metrics: Top-level metrics dictionary
             income_df: Income breakdown DataFrame
             expense_df: Expense breakdown DataFrame
+            cash_balances: Optional dict with start/end cash balances
             month: Optional month string for title
         """
         self.console.print()
@@ -206,6 +251,9 @@ class BudgetDisplay:
         self.display_top_metrics(metrics, month)
         self.display_income_table(income_df)
         self.display_expense_table(expense_df)
+
+        if cash_balances:
+            self.display_cash_balances(cash_balances)
 
         # Footer
         self.console.print()
