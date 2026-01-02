@@ -64,31 +64,54 @@ To be determined - options include:
 
 **Usage**:
 ```bash
-python cash_budget.py                    # Previous month
-python cash_budget.py --month 2025-12    # Specific month
+python cash_budget.py                         # Previous month
+python cash_budget.py --month 2025-12         # Specific month
 python cash_budget.py --month 2025-12 --save  # Save to file
+python cash_budget.py --month 2025-12 --pdf   # Generate PDF report
 ```
 
 **Top-Level Metrics**:
 1. True Cash Remaining = Income - Cash Expenses - CC Payments
 2. Total New CC Spending = Sum of all CC transactions
-3. ~~Budget Target~~ (deferred - Monarch API issue, will add user-defined budgets later)
+3. Transfer transactions tracked separately (excluded from metrics, shown in PDF)
 
-**Phases Completed**:
-- [x] Phase 1: API explorer script (`explore_budgets.py`)
-- [x] Phase 2: Data structures (`budget_data.py`)
-- [x] Phase 3: CashBudgetAnalyzer class (in `analyzer.py`)
-- [x] Phase 4: Rich terminal display (`budget_display.py`)
-- [x] Phase 5: CLI integration (`cash_budget.py`)
-- [ ] Phase 6: Refinements (deferred)
+**Features**:
+- [x] Rich terminal display with tables
+- [x] PDF report generation with matplotlib
+- [x] Cash balance chart over time
+- [x] Transfer transactions page in PDF
+- [x] Automatic MFA authentication (via MONARCH_MFA_SECRET env var)
 
-**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Budget targets deferred.
+### ✅ Completed - Budget Forecast Feature
+
+**Goal**: Show expected cash position at end of month based on budget.
+
+**Usage**:
+```bash
+python budget_forecast.py                     # Current month
+python budget_forecast.py --month 2026-01     # Specific month
+python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
+```
+
+**Calculation**:
+- Starting Cash (from account snapshots)
+- + Expected Income (from budget)
+- - Expected Expenses (from budget)
+- = Expected End Cash
+
+**Features**:
+- [x] Custom GraphQL query for budget data (library's get_budgets() fails)
+- [x] Rich terminal display
+- [x] PDF report with income/expense breakdowns
+
+**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Implemented custom GraphQL query that works.
 
 ### 📋 Future Steps
-1. Complete enhanced cash budget feature
-2. Add user-defined budget targets (JSON config)
-3. Add export functionality (CSV/Excel)
-4. Consider payoff projections
+1. Add user-defined budget targets (JSON config)
+2. Add export functionality (CSV/Excel)
+3. Consider payoff projections
+4. Multi-month trend analysis
+5. Budget vs actual comparison reports
 
 ## Quick Start
 

@@ -221,3 +221,67 @@ class MonarchClient:
             self.mm.get_account_history,
             account_id=int(account_id)
         )
+
+    async def get_budget_data(self, month: str) -> Dict[str, Any]:
+        """
+        Get budget data for a specific month.
+
+        Uses a simplified GraphQL query that works (the library's get_budgets fails).
+
+        Args:
+            month: Month in YYYY-MM format (e.g., '2026-01')
+
+        Returns:
+            Dictionary with budget data including:
+            - monthlyAmountsByCategory: List of categories with planned/actual amounts
+            - totalsByMonth: Summary totals for income and expenses
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        from gql import gql
+
+        query = gql('''
+            query GetBudgetData($month: Date!) {
+                budgetData(startMonth: $month, endMonth: $month) {
+                    monthlyAmountsByCategory {
+                        category {
+                            id
+                            name
+                            group {
+                                id
+                                name
+                                type
+                            }
+                        }
+                        monthlyAmounts {
+                            month
+                            plannedCashFlowAmount
+                            actualAmount
+                            remainingAmount
+                        }
+                    }
+                    totalsByMonth {
+                        month
+                        totalIncome {
+                            plannedAmount
+                            actualAmount
+                        }
+                        totalExpenses {
+                            plannedAmount
+                            actualAmount
+                        }
+                    }
+                }
+            }
+        ''')
+
+        # Format month as YYYY-MM
+        month_date = f"{month}-01" if len(month) == 7 else month
+
+        async def _execute():
+            client = self.mm._get_graphql_client()
+            result = await client.execute_async(query, variable_values={'month': month_date})
+            return result.get('budgetData', {})
+
+        return await self._api_call_with_retry(_execute)
