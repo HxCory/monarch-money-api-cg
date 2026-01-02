@@ -2,22 +2,25 @@
 """
 Debt Payoff Projection
 
-Shows how quickly credit card debt could be paid off based on
-expected monthly surplus from budget forecast.
+Shows how quickly debt could be paid off based on expected monthly surplus
+from budget forecast.
 
-Generates projections for different allocation percentages:
-25%, 50%, 60%, 65%, 70%, 75% of leftover money going to CC debt.
+Supports two debt types:
+- Credit Cards (cc): 24% APR, payment = allocation % of surplus
+- Loans (loan): 12.71% APR, payment = base budget amount + allocation % of surplus
 
 Usage:
-    python debt_payoff.py                    # Current month forecast
-    python debt_payoff.py --month 2026-01    # Specific month forecast
+    python debt_payoff.py                        # CC debt, current month
+    python debt_payoff.py --type loan            # Loan debt, current month
+    python debt_payoff.py --type cc --month 2026-01
+    python debt_payoff.py --type loan --month 2026-01
 """
 
 import argparse
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from dateutil.relativedelta import relativedelta
@@ -31,38 +34,52 @@ from monarch_budgeting.utils import (
     format_currency,
     parse_month,
     get_current_month_range,
-    parse_budget_totals,
 )
 
 
 # Payoff allocation percentages to model
 PAYOFF_PERCENTAGES = [0.25, 0.35, 0.50, 0.60, 0.65, 0.70, 0.75]
 
-# Assumed annual interest rate for credit cards
-ANNUAL_INTEREST_RATE = 0.24
-MONTHLY_INTEREST_RATE = ANNUAL_INTEREST_RATE / 12
+# Interest rates by debt type
+INTEREST_RATES = {
+    'cc': 0.24,      # 24% APR for credit cards
+    'loan': 0.1271,  # 12.71% APR for loans
+}
+
+# Account type names in Monarch API
+ACCOUNT_TYPES = {
+    'cc': 'credit',
+    'loan': 'loan',
+}
+
+# Display names for debt types
+DEBT_TYPE_NAMES = {
+    'cc': 'Credit Card',
+    'loan': 'Loan',
+}
 
 
 def project_payoff(
-    total_cc_debt: float,
+    total_debt: float,
     monthly_payment: float,
-    monthly_interest_rate: float = MONTHLY_INTEREST_RATE,
-    max_months: int = 120
+    annual_interest_rate: float,
+    max_months: int = 240
 ) -> Dict[str, Any]:
     """
     Project debt payoff over time.
 
     Args:
-        total_cc_debt: Starting total CC debt (positive number)
+        total_debt: Starting total debt (positive number)
         monthly_payment: Amount paid toward debt each month
-        monthly_interest_rate: Monthly interest rate (default 2% = 24% APR / 12)
+        annual_interest_rate: Annual interest rate (e.g., 0.24 for 24%)
         max_months: Maximum months to project
 
     Returns:
         Dict with 'timeline' (list of (month, balance) tuples),
-        'total_interest', 'total_paid', 'months'
+        'total_interest', 'total_paid', 'months', 'paid_off'
     """
-    balance = total_cc_debt
+    monthly_interest_rate = annual_interest_rate / 12
+    balance = total_debt
     timeline = [(0, balance)]
     total_interest = 0
     total_paid = 0
@@ -94,19 +111,27 @@ def project_payoff(
 
 def generate_payoff_plot(
     filepath: str,
-    total_cc_debt: float,
+    total_debt: float,
     monthly_surplus: float,
-    start_date: datetime
+    base_payment: float,
+    start_date: datetime,
+    debt_type: str
 ):
     """
     Generate a plot showing debt payoff projections at different allocation rates.
 
     Args:
         filepath: Output file path for the plot
-        total_cc_debt: Starting total CC debt
+        total_debt: Starting total debt
         monthly_surplus: Expected monthly surplus (leftover cash)
+        base_payment: Base monthly payment (0 for CC, budgeted amount for loans)
         start_date: Starting month for projections
+        debt_type: 'cc' or 'loan'
     """
+    annual_rate = INTEREST_RATES[debt_type]
+    monthly_rate = annual_rate / 12
+    type_name = DEBT_TYPE_NAMES[debt_type]
+
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, ax = plt.subplots(figsize=(12, 8))
 
@@ -114,8 +139,9 @@ def generate_payoff_plot(
     colors = ['#e74c3c', '#c0392b', '#e67e22', '#f39c12', '#27ae60', '#2980b9', '#8e44ad']
 
     for i, pct in enumerate(PAYOFF_PERCENTAGES):
-        monthly_payment = monthly_surplus * pct
-        result = project_payoff(total_cc_debt, monthly_payment)
+        additional_payment = monthly_surplus * pct
+        total_payment = base_payment + additional_payment
+        result = project_payoff(total_debt, total_payment, annual_rate)
         timeline = result['timeline']
 
         # Convert to dates and balances
@@ -123,7 +149,10 @@ def generate_payoff_plot(
         balances = [b for _, b in timeline]
 
         # Plot this scenario
-        label = f"{int(pct * 100)}% ({format_currency(monthly_payment)}/mo)"
+        if base_payment > 0:
+            label = f"{int(pct * 100)}% (+{format_currency(additional_payment)} = {format_currency(total_payment)}/mo)"
+        else:
+            label = f"{int(pct * 100)}% ({format_currency(total_payment)}/mo)"
         ax.plot(dates, balances, marker='o', markersize=3, linewidth=2,
                 color=colors[i], label=label, alpha=0.8)
 
@@ -136,11 +165,18 @@ def generate_payoff_plot(
                        fontsize=8,
                        color=colors[i])
 
-    # Formatting
-    ax.set_title(f'Credit Card Debt Payoff Projections\n'
-                 f'Starting Debt: {format_currency(total_cc_debt)} | '
-                 f'Monthly Surplus: {format_currency(monthly_surplus)}',
-                 fontsize=14, fontweight='bold')
+    # Title
+    if base_payment > 0:
+        title = (f'{type_name} Debt Payoff Projections\n'
+                 f'Starting Debt: {format_currency(total_debt)} | '
+                 f'Base Payment: {format_currency(base_payment)}/mo | '
+                 f'Surplus: {format_currency(monthly_surplus)}')
+    else:
+        title = (f'{type_name} Debt Payoff Projections\n'
+                 f'Starting Debt: {format_currency(total_debt)} | '
+                 f'Monthly Surplus: {format_currency(monthly_surplus)}')
+
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel('Date', fontsize=12)
     ax.set_ylabel('Remaining Balance', fontsize=12)
 
@@ -149,15 +185,21 @@ def generate_payoff_plot(
 
     # Format x-axis as dates
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    # Adjust interval based on payoff timeline
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
     plt.xticks(rotation=45, ha='right')
 
     # Legend
-    ax.legend(title='Allocation % (Monthly Payment)', loc='upper right', fontsize=9)
+    if base_payment > 0:
+        ax.legend(title='Allocation % (+ Additional = Total Payment)',
+                  loc='upper right', fontsize=8)
+    else:
+        ax.legend(title='Allocation % (Monthly Payment)',
+                  loc='upper right', fontsize=9)
 
     # Add note about interest rate assumption
     ax.text(0.02, 0.02,
-            f'* Assumes {ANNUAL_INTEREST_RATE:.0%} APR ({MONTHLY_INTEREST_RATE:.2%}/month) interest on remaining balance',
+            f'* Assumes {annual_rate:.2%} APR ({monthly_rate:.2%}/month) interest on remaining balance',
             transform=ax.transAxes,
             fontsize=9,
             style='italic',
@@ -174,51 +216,89 @@ def generate_payoff_plot(
 
 def display_summary(
     console: Console,
-    total_cc_debt: float,
+    total_debt: float,
     monthly_surplus: float,
-    start_date: datetime
+    base_payment: float,
+    start_date: datetime,
+    debt_type: str
 ):
     """Display payoff projections in terminal."""
+    annual_rate = INTEREST_RATES[debt_type]
+    monthly_rate = annual_rate / 12
+    type_name = DEBT_TYPE_NAMES[debt_type]
+
     # Summary panel
-    summary = f"""
-[bold]Starting CC Debt:[/bold] {format_currency(total_cc_debt)}
+    if base_payment > 0:
+        summary = f"""
+[bold]Starting {type_name} Debt:[/bold] {format_currency(total_debt)}
+[bold]Base Monthly Payment:[/bold] {format_currency(base_payment)} (from budget)
 [bold]Monthly Surplus:[/bold] {format_currency(monthly_surplus)}
-[bold]Interest Rate:[/bold] {ANNUAL_INTEREST_RATE:.0%} APR ({MONTHLY_INTEREST_RATE:.2%}/month)
+[bold]Interest Rate:[/bold] {annual_rate:.2%} APR ({monthly_rate:.2%}/month)
 """
-    console.print(Panel(summary, title="Debt Payoff Projections", border_style="blue"))
+    else:
+        summary = f"""
+[bold]Starting {type_name} Debt:[/bold] {format_currency(total_debt)}
+[bold]Monthly Surplus:[/bold] {format_currency(monthly_surplus)}
+[bold]Interest Rate:[/bold] {annual_rate:.0%} APR ({monthly_rate:.2%}/month)
+"""
+    console.print(Panel(summary, title=f"{type_name} Debt Payoff Projections", border_style="blue"))
 
     # Projections table
     table = Table(title="Payoff Scenarios")
     table.add_column("Allocation", style="cyan", justify="right")
-    table.add_column("Monthly Payment", justify="right")
-    table.add_column("Months to Payoff", justify="right")
+    if base_payment > 0:
+        table.add_column("Additional", justify="right")
+    table.add_column("Total Payment", justify="right")
+    table.add_column("Months", justify="right")
     table.add_column("Payoff Date", justify="right")
-    table.add_column("Total Interest Paid", justify="right", style="red")
+    table.add_column("Total Interest", justify="right", style="red")
 
     for pct in PAYOFF_PERCENTAGES:
-        monthly_payment = monthly_surplus * pct
-        result = project_payoff(total_cc_debt, monthly_payment)
+        additional_payment = monthly_surplus * pct
+        total_payment = base_payment + additional_payment
+        result = project_payoff(total_debt, total_payment, annual_rate)
 
         months = result['months']
         payoff_date = start_date + relativedelta(months=months)
 
         if result['paid_off']:
-            table.add_row(
-                f"{int(pct * 100)}%",
-                format_currency(monthly_payment),
-                str(months),
-                payoff_date.strftime("%b %Y"),
-                format_currency(result['total_interest'])
-            )
+            if base_payment > 0:
+                table.add_row(
+                    f"{int(pct * 100)}%",
+                    format_currency(additional_payment),
+                    format_currency(total_payment),
+                    str(months),
+                    payoff_date.strftime("%b %Y"),
+                    format_currency(result['total_interest'])
+                )
+            else:
+                table.add_row(
+                    f"{int(pct * 100)}%",
+                    format_currency(total_payment),
+                    str(months),
+                    payoff_date.strftime("%b %Y"),
+                    format_currency(result['total_interest'])
+                )
         else:
-            table.add_row(
-                f"{int(pct * 100)}%",
-                format_currency(monthly_payment),
-                "120+",
-                "Not within 10 years",
-                "N/A",
-                style="dim"
-            )
+            if base_payment > 0:
+                table.add_row(
+                    f"{int(pct * 100)}%",
+                    format_currency(additional_payment),
+                    format_currency(total_payment),
+                    "240+",
+                    "Not within 20 years",
+                    "N/A",
+                    style="dim"
+                )
+            else:
+                table.add_row(
+                    f"{int(pct * 100)}%",
+                    format_currency(total_payment),
+                    "120+",
+                    "Not within 10 years",
+                    "N/A",
+                    style="dim"
+                )
 
     console.print(table)
 
@@ -246,12 +326,48 @@ async def get_starting_cash(client: MonarchClient, start_date: datetime) -> floa
     return snapshot_list[0].get('balance', 0) if snapshot_list else 0
 
 
-async def run_debt_payoff(month: str = None):
+def get_budget_category_amount(budget_data: Dict[str, Any], category_name: str) -> float:
+    """
+    Get the planned amount for a specific budget category.
+
+    Args:
+        budget_data: Raw budget data from client.get_budget_data()
+        category_name: Name of the category to find (e.g., "Loan Repayment")
+
+    Returns:
+        Planned amount for the category, or 0 if not found
+    """
+    for cat_data in budget_data.get('monthlyAmountsByCategory', []):
+        category = cat_data.get('category', {})
+        if category.get('name', '').lower() == category_name.lower():
+            amounts = cat_data.get('monthlyAmounts', [{}])[0]
+            return amounts.get('plannedCashFlowAmount', 0)
+    return 0
+
+
+def parse_budget_totals(budget_data: Dict[str, Any]) -> Dict[str, float]:
+    """Parse budget API response to extract income and expense totals."""
+    result = {
+        'total_income': 0,
+        'total_expenses': 0,
+    }
+
+    totals = budget_data.get('totalsByMonth', [])
+    if totals:
+        result['total_income'] = totals[0].get('totalIncome', {}).get('plannedAmount', 0)
+        result['total_expenses'] = totals[0].get('totalExpenses', {}).get('plannedAmount', 0)
+
+    return result
+
+
+async def run_debt_payoff(month: str = None, debt_type: str = 'cc'):
     """Run the debt payoff projection analysis."""
     console = Console()
+    type_name = DEBT_TYPE_NAMES[debt_type]
+    account_type = ACCOUNT_TYPES[debt_type]
 
     console.print()
-    console.print("[bold]Debt Payoff Projection[/bold]")
+    console.print(f"[bold]{type_name} Debt Payoff Projection[/bold]")
     console.print()
 
     # Parse month or use current month
@@ -271,21 +387,28 @@ async def run_debt_payoff(month: str = None):
     await client.login(use_saved_session=True)
     console.print("[green]✓[/green] Login successful")
 
-    # Get credit card accounts and balances
-    console.print("[dim]Fetching credit card accounts...[/dim]")
+    # Get accounts and balances for the debt type
+    console.print(f"[dim]Fetching {type_name.lower()} accounts...[/dim]")
     accounts = await client.get_accounts()
-    cc_accounts = [acc for acc in accounts if acc.get('type', {}).get('name') == 'credit']
+    debt_accounts = [acc for acc in accounts if acc.get('type', {}).get('name') == account_type]
 
-    total_cc_debt = sum(
+    # Filter to accounts included in net worth with actual debt (negative balance)
+    debt_accounts_with_balance = [
+        acc for acc in debt_accounts
+        if (acc.get('currentBalance', 0) or 0) < 0
+        and acc.get('includeBalanceInNetWorth', False)
+    ]
+
+    total_debt = sum(
         abs(acc.get('currentBalance', 0) or 0)
-        for acc in cc_accounts
+        for acc in debt_accounts_with_balance
     )
 
-    console.print(f"[green]✓[/green] Found {len(cc_accounts)} credit cards")
-    for acc in cc_accounts:
+    console.print(f"[green]✓[/green] Found {len(debt_accounts_with_balance)} {type_name.lower()} accounts with debt")
+    for acc in debt_accounts_with_balance:
         balance = acc.get('currentBalance', 0) or 0
         console.print(f"[dim]  - {acc.get('displayName')}: {format_currency(abs(balance))}[/dim]")
-    console.print(f"[bold]Total CC Debt: {format_currency(total_cc_debt)}[/bold]")
+    console.print(f"[bold]Total {type_name} Debt: {format_currency(total_debt)}[/bold]")
     console.print()
 
     # Get starting cash balance
@@ -305,35 +428,51 @@ async def run_debt_payoff(month: str = None):
     console.print(f"[green]✓[/green] Expected income: {format_currency(expected_income)}")
     console.print(f"[green]✓[/green] Expected expenses: {format_currency(expected_expenses)}")
     console.print(f"[bold]Monthly Surplus: {format_currency(monthly_surplus)}[/bold]")
+
+    # For loans, get the base payment from budget
+    base_payment = 0
+    if debt_type == 'loan':
+        base_payment = get_budget_category_amount(budget_data, 'Loan Repayment')
+        console.print(f"[green]✓[/green] Loan Repayment budget: {format_currency(base_payment)}/month")
+
     console.print()
 
     if monthly_surplus <= 0:
-        console.print("[red]Warning: No surplus available for debt payoff![/red]")
-        console.print("[dim]Consider reducing expenses or increasing income.[/dim]")
+        console.print("[red]Warning: No surplus available for additional debt payoff![/red]")
+        if base_payment > 0:
+            console.print(f"[dim]You can still pay the base amount of {format_currency(base_payment)}/month.[/dim]")
+        else:
+            console.print("[dim]Consider reducing expenses or increasing income.[/dim]")
         return
 
-    if total_cc_debt <= 0:
-        console.print("[green]No credit card debt to pay off![/green]")
+    if total_debt <= 0:
+        console.print(f"[green]No {type_name.lower()} debt to pay off![/green]")
         return
 
     # Display summary
-    display_summary(console, total_cc_debt, monthly_surplus, start_date)
+    display_summary(console, total_debt, monthly_surplus, base_payment, start_date, debt_type)
 
     # Generate plot
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
-    plot_filename = f"debt_payoff_{month_key}.png"
+    plot_filename = f"{debt_type}_payoff_{month_key}.png"
     plot_filepath = output_dir / plot_filename
 
     console.print()
     console.print("[dim]Generating payoff projection plot...[/dim]")
-    generate_payoff_plot(str(plot_filepath), total_cc_debt, monthly_surplus, start_date)
+    generate_payoff_plot(str(plot_filepath), total_debt, monthly_surplus, base_payment, start_date, debt_type)
     console.print(f"[green]✓[/green] Plot saved to: {plot_filepath}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Debt Payoff Projection - See how fast you can pay off CC debt"
+        description="Debt Payoff Projection - See how fast you can pay off debt"
+    )
+    parser.add_argument(
+        "--type", "-t",
+        choices=['cc', 'loan'],
+        default='cc',
+        help="Type of debt: 'cc' for credit cards (24%% APR), 'loan' for loans (12.71%% APR)"
     )
     parser.add_argument(
         "--month", "-m",
@@ -343,7 +482,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        asyncio.run(run_debt_payoff(month=args.month))
+        asyncio.run(run_debt_payoff(month=args.month, debt_type=args.type))
     except KeyboardInterrupt:
         print("\nCancelled.")
     except Exception as e:
