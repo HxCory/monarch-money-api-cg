@@ -10,6 +10,7 @@ Usage:
     python cash_budget.py                    # Current month
     python cash_budget.py --month 2025-12    # Specific month
     python cash_budget.py --month 2025-12 --save  # Save output to file
+    python cash_budget.py --month 2025-12 --pdf   # Generate PDF report
 """
 
 import argparse
@@ -21,6 +22,7 @@ from monarch_budgeting.client import MonarchClient
 from monarch_budgeting.analyzer import CashBudgetAnalyzer
 from monarch_budgeting.budget_data import parse_categories
 from monarch_budgeting.budget_display import BudgetDisplay
+from monarch_budgeting.budget_pdf import BudgetPDFReport
 
 
 def parse_month(month_str: str) -> tuple[datetime, datetime]:
@@ -91,7 +93,7 @@ def parse_cash_balances(snapshots: dict, start_date: datetime, end_date: datetim
     }
 
 
-async def run_cash_budget(month: str = None, save: bool = False):
+async def run_cash_budget(month: str = None, save: bool = False, pdf: bool = False):
     """Run the cash budget analysis."""
     display = BudgetDisplay()
     console = display.console
@@ -133,6 +135,15 @@ async def run_cash_budget(month: str = None, save: bool = False):
     accounts = await client.get_accounts()
     console.print(f"[green]✓[/green] Found {len(accounts)} accounts")
 
+    # Show cash accounts for debugging
+    cash_account_types = ('cash', 'checking', 'savings', 'depository')
+    cash_accounts = [acc for acc in accounts if acc.get('type', {}).get('name') in cash_account_types]
+    console.print(f"[dim]Cash accounts ({len(cash_accounts)}):[/dim]")
+    for acc in cash_accounts:
+        acc_type = acc.get('type', {}).get('name', 'unknown')
+        balance = acc.get('currentBalance', 0)
+        console.print(f"[dim]  - {acc.get('displayName')}: ${balance:,.2f} ({acc_type})[/dim]")
+
     # Fetch categories
     console.print("[dim]Fetching categories...[/dim]")
     categories = await fetch_categories(client)
@@ -168,7 +179,7 @@ async def run_cash_budget(month: str = None, save: bool = False):
     # Display
     display.display_full_budget(metrics, income, expenses, cash_balances, month=month_str)
 
-    # Save if requested
+    # Save text file if requested
     if save:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -185,6 +196,45 @@ async def run_cash_budget(month: str = None, save: bool = False):
 
         console.print(f"[green]✓[/green] Saved to: {filepath}")
 
+    # Generate PDF if requested
+    if pdf:
+        console.print()
+        console.print("[dim]Fetching account histories for chart...[/dim]")
+
+        # Fetch history for each cash account
+        account_histories = {}
+        for acc in cash_accounts:
+            acc_id = acc.get('id')
+            acc_name = acc.get('displayName', f'Account {acc_id}')
+            try:
+                history = await client.get_account_history(acc_id)
+                account_histories[acc_name] = history
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not fetch history for {acc_name}: {e}[/yellow]")
+
+        console.print(f"[green]✓[/green] Fetched history for {len(account_histories)} accounts")
+
+        # Generate PDF
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        pdf_filename = f"cash_budget_{start_date.strftime('%Y%m')}.pdf"
+        pdf_filepath = output_dir / pdf_filename
+
+        console.print("[dim]Generating PDF report...[/dim]")
+        pdf_report = BudgetPDFReport()
+        pdf_report.generate_report(
+            filepath=str(pdf_filepath),
+            metrics=metrics,
+            income_df=income,
+            expense_df=expenses,
+            cash_balances=cash_balances,
+            account_histories=account_histories,
+            start_date=start_date,
+            end_date=end_date,
+            month=month_str
+        )
+        console.print(f"[green]✓[/green] PDF saved to: {pdf_filepath}")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -199,11 +249,16 @@ def main():
         action="store_true",
         help="Save output to file in output/ directory"
     )
+    parser.add_argument(
+        "--pdf", "-p",
+        action="store_true",
+        help="Generate PDF report with charts in output/ directory"
+    )
 
     args = parser.parse_args()
 
     try:
-        asyncio.run(run_cash_budget(month=args.month, save=args.save))
+        asyncio.run(run_cash_budget(month=args.month, save=args.save, pdf=args.pdf))
     except KeyboardInterrupt:
         print("\nCancelled.")
     except Exception as e:

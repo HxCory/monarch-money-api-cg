@@ -200,3 +200,21 @@ class MonarchClient:
             end_date=end_date.strftime('%Y-%m-%d') if end_date else None,
             account_type=account_type
         )
+
+    async def get_account_history(self, account_id: str) -> Dict[str, Any]:
+        """
+        Get historical balance snapshots for a specific account.
+
+        Args:
+            account_id: The account ID
+
+        Returns:
+            Dictionary with historical snapshot data
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        return await self._api_call_with_retry(
+            self.mm.get_account_history,
+            account_id=int(account_id)
+        )
