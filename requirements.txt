@@ -11,3 +11,6 @@ seaborn
 
 # Optional: for export formats
 openpyxl
+
+# Terminal UI
+rich

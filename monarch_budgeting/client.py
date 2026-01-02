@@ -5,9 +5,11 @@ This module provides a convenient interface to the Monarch Money API
 using the monarchmoney library.
 """
 
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from monarchmoney import MonarchMoney
+from monarchmoney.monarchmoney import RequireMFAException
 
 
 class MonarchClient:
@@ -17,36 +19,97 @@ class MonarchClient:
         """Initialize the Monarch Money client."""
         self.mm = MonarchMoney()
         self._authenticated = False
+        self._email = None
+        self._password = None
+        self._mfa_secret = None
+
+    async def _do_login(self, email: str, password: str,
+                        use_saved_session: bool, mfa_secret_key: Optional[str],
+                        prompt_for_mfa: bool) -> None:
+        """Internal login helper that handles MFA."""
+        try:
+            await self.mm.login(
+                email=email,
+                password=password,
+                use_saved_session=use_saved_session,
+                mfa_secret_key=mfa_secret_key
+            )
+        except RequireMFAException:
+            if not prompt_for_mfa:
+                raise
+            if not email or not password:
+                raise ValueError("Email and password required for MFA. Set MONARCH_EMAIL and MONARCH_PASSWORD env vars.")
+
+            # Prompt user for MFA code
+            mfa_code = input("Enter MFA code: ").strip()
+            await self.mm.multi_factor_authenticate(email, password, mfa_code)
 
     async def login(self, email: Optional[str] = None, password: Optional[str] = None,
-                   use_saved_session: bool = True, mfa_secret_key: Optional[str] = None) -> bool:
+                   use_saved_session: bool = True, mfa_secret_key: Optional[str] = None,
+                   prompt_for_mfa: bool = True) -> bool:
         """
         Login to Monarch Money.
 
         Args:
-            email: User email (optional if using saved session)
-            password: User password (optional if using saved session)
+            email: User email (uses MONARCH_EMAIL env var if not provided)
+            password: User password (uses MONARCH_PASSWORD env var if not provided)
             use_saved_session: Whether to try using a saved session first
             mfa_secret_key: TOTP secret for MFA (optional)
+            prompt_for_mfa: If True, prompt user for MFA code when required
 
         Returns:
             True if login successful
         """
-        # The library's login() method handles saved sessions automatically
-        await self.mm.login(
-            email=email,
-            password=password,
-            use_saved_session=use_saved_session,
-            mfa_secret_key=mfa_secret_key
-        )
+        # Get credentials from env vars if not provided
+        self._email = email or os.environ.get('MONARCH_EMAIL')
+        self._password = password or os.environ.get('MONARCH_PASSWORD')
+        self._mfa_secret = mfa_secret_key or os.environ.get('MONARCH_MFA_SECRET')
+
+        if use_saved_session:
+            # First, try to use saved session WITHOUT passing credentials
+            # This prevents the library from attempting a fresh login
+            try:
+                await self.mm.login(use_saved_session=True)
+                self._authenticated = True
+                return True
+            except Exception:
+                # Session doesn't exist or is invalid, fall through to credential login
+                pass
+
+        # No valid session, need to login with credentials
+        await self._do_login(self._email, self._password,
+                            use_saved_session=False, mfa_secret_key=self._mfa_secret,
+                            prompt_for_mfa=prompt_for_mfa)
         self._authenticated = True
         return True
+
+    async def _ensure_authenticated(self) -> None:
+        """Re-authenticate if session has expired (called on 401 errors)."""
+        if self._email and self._password:
+            print("Session expired, re-authenticating...")
+            # Create new client to clear stale session
+            self.mm = MonarchMoney()
+            await self._do_login(self._email, self._password,
+                               use_saved_session=False, mfa_secret_key=self._mfa_secret,
+                               prompt_for_mfa=True)
+            self._authenticated = True
+
+    async def _api_call_with_retry(self, api_func, *args, **kwargs):
+        """Make an API call, retrying with re-auth on 401."""
+        from gql.transport.exceptions import TransportServerError
+        try:
+            return await api_func(*args, **kwargs)
+        except TransportServerError as e:
+            if '401' in str(e):
+                await self._ensure_authenticated()
+                return await api_func(*args, **kwargs)
+            raise
 
     async def get_accounts(self) -> List[Dict[str, Any]]:
         """Get all accounts."""
         if not self._authenticated:
             raise RuntimeError("Must login first")
-        result = await self.mm.get_accounts()
+        result = await self._api_call_with_retry(self.mm.get_accounts)
         # API returns {'accounts': [...], 'householdPreferences': ...}
         return result.get('accounts', [])
 
@@ -81,7 +144,8 @@ class MonarchClient:
         if not end_date:
             end_date = datetime.now()
 
-        result = await self.mm.get_transactions(
+        result = await self._api_call_with_retry(
+            self.mm.get_transactions,
             start_date=start_date.strftime('%Y-%m-%d'),
             end_date=end_date.strftime('%Y-%m-%d'),
             account_ids=account_ids,
@@ -105,10 +169,119 @@ class MonarchClient:
         if not self._authenticated:
             raise RuntimeError("Must login first")
 
-        return await self.mm.get_budgets(start_date=start_date, end_date=end_date)
+        return await self._api_call_with_retry(
+            self.mm.get_budgets, start_date=start_date, end_date=end_date
+        )
 
     async def get_transaction_categories(self) -> List[Dict[str, Any]]:
         """Get all transaction categories."""
         if not self._authenticated:
             raise RuntimeError("Must login first")
-        return await self.mm.get_transaction_categories()
+        return await self._api_call_with_retry(self.mm.get_transaction_categories)
+
+    async def get_aggregate_snapshots(self,
+                                      start_date: Optional[datetime] = None,
+                                      end_date: Optional[datetime] = None,
+                                      account_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get daily aggregate account snapshots.
+
+        Args:
+            start_date: Start date for snapshots
+            end_date: End date for snapshots
+            account_type: Filter by account type (e.g., 'depository' for cash accounts)
+
+        Returns:
+            Dictionary with snapshot data
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        return await self._api_call_with_retry(
+            self.mm.get_aggregate_snapshots,
+            start_date=start_date.strftime('%Y-%m-%d') if start_date else None,
+            end_date=end_date.strftime('%Y-%m-%d') if end_date else None,
+            account_type=account_type
+        )
+
+    async def get_account_history(self, account_id: str) -> Dict[str, Any]:
+        """
+        Get historical balance snapshots for a specific account.
+
+        Args:
+            account_id: The account ID
+
+        Returns:
+            Dictionary with historical snapshot data
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        return await self._api_call_with_retry(
+            self.mm.get_account_history,
+            account_id=int(account_id)
+        )
+
+    async def get_budget_data(self, month: str) -> Dict[str, Any]:
+        """
+        Get budget data for a specific month.
+
+        Uses a simplified GraphQL query that works (the library's get_budgets fails).
+
+        Args:
+            month: Month in YYYY-MM format (e.g., '2026-01')
+
+        Returns:
+            Dictionary with budget data including:
+            - monthlyAmountsByCategory: List of categories with planned/actual amounts
+            - totalsByMonth: Summary totals for income and expenses
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must login first")
+
+        from gql import gql
+
+        query = gql('''
+            query GetBudgetData($month: Date!) {
+                budgetData(startMonth: $month, endMonth: $month) {
+                    monthlyAmountsByCategory {
+                        category {
+                            id
+                            name
+                            group {
+                                id
+                                name
+                                type
+                            }
+                        }
+                        monthlyAmounts {
+                            month
+                            plannedCashFlowAmount
+                            actualAmount
+                            remainingAmount
+                        }
+                    }
+                    totalsByMonth {
+                        month
+                        totalIncome {
+                            plannedAmount
+                            actualAmount
+                        }
+                        totalExpenses {
+                            plannedAmount
+                            actualAmount
+                        }
+                    }
+                }
+            }
+        ''')
+
+        # Format month as YYYY-MM
+        month_date = f"{month}-01" if len(month) == 7 else month
+
+        async def _execute():
+            client = self.mm._get_graphql_client()
+            result = await client.execute_async(query, variable_values={'month': month_date})
+            return result.get('budgetData', {})
+
+        return await self._api_call_with_retry(_execute)

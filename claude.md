@@ -52,22 +52,66 @@ To be determined - options include:
 - [x] Added basic credit card summary and categorization
 - [x] Created example script for running analysis
 - [x] Moved original JavaScript implementation to `tmp/JS/`
+- [x] Fixed API compatibility (gql<4.0, response format parsing)
+- [x] Added time series visualizations (payments vs purchases, by card, cumulative debt)
+- [x] Added timestamped output directories for analysis runs
+- [x] Tested with real Monarch Money account data
 
-### 🔄 In Progress
-- [ ] Test with real Monarch Money account
-- [ ] Refine transaction categorization logic
-- [ ] Validate data format assumptions
+### ✅ Completed - Enhanced Cash-Based Budget Feature
+**Branch**: `feature/cc-enhanced-budget`
 
-### 📋 Next Steps
-1. Install dependencies and test authentication
-2. Run initial analysis to understand data structure
-3. Refine credit card debt payoff calculations based on actual data
-4. Add more detailed reporting features:
-   - Monthly trends
-   - Payoff projections
-   - Category breakdowns
-5. Add export functionality (CSV/Excel)
-6. Consider visualization options
+**Goal**: Show TRUE CASH REMAINING by separating CC spending from actual cash outflows.
+
+**Usage**:
+```bash
+python cash_budget.py                         # Previous month
+python cash_budget.py --month 2025-12         # Specific month
+python cash_budget.py --month 2025-12 --save  # Save to file
+python cash_budget.py --month 2025-12 --pdf   # Generate PDF report
+```
+
+**Top-Level Metrics**:
+1. True Cash Remaining = Income - Cash Expenses - CC Payments
+2. Total New CC Spending = Sum of all CC transactions
+3. Transfer transactions tracked separately (excluded from metrics, shown in PDF)
+
+**Features**:
+- [x] Rich terminal display with tables
+- [x] PDF report generation with matplotlib
+- [x] Cash balance chart over time
+- [x] Transfer transactions page in PDF
+- [x] Automatic MFA authentication (via MONARCH_MFA_SECRET env var)
+
+### ✅ Completed - Budget Forecast Feature
+
+**Goal**: Show expected cash position at end of month based on budget.
+
+**Usage**:
+```bash
+python budget_forecast.py                     # Current month
+python budget_forecast.py --month 2026-01     # Specific month
+python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
+```
+
+**Calculation**:
+- Starting Cash (from account snapshots)
+- + Expected Income (from budget)
+- - Expected Expenses (from budget)
+- = Expected End Cash
+
+**Features**:
+- [x] Custom GraphQL query for budget data (library's get_budgets() fails)
+- [x] Rich terminal display
+- [x] PDF report with income/expense breakdowns
+
+**Known Issue**: `monarchmoney` library's `get_budgets()` returns server error. Implemented custom GraphQL query that works.
+
+### 📋 Future Steps
+1. Add user-defined budget targets (JSON config)
+2. Add export functionality (CSV/Excel)
+3. Consider payoff projections
+4. Multi-month trend analysis
+5. Budget vs actual comparison reports
 
 ## Quick Start
 

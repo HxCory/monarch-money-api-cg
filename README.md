@@ -23,7 +23,10 @@ Monarch Money is great, but tracking credit card debt payoff can be tricky. This
 ✅ **Cash flow analysis over time** - Track income, total expenses, CC expenses, and cash balance
 ✅ **Visualization** - Beautiful plots showing your financial trends
 ✅ **Summary statistics** - Average monthly metrics and totals
-✅ Text-based reporting
+✅ **Cash-based budget view** - See TRUE CASH REMAINING (income - cash expenses - CC payments)
+✅ **Budget forecast** - Project expected end-of-month cash based on budget
+✅ **PDF reports** - Generate professional PDF reports with charts
+✅ Text-based reporting with Rich terminal tables
 🔄 Payoff projections (coming soon)
 🔄 Export to CSV/Excel (coming soon)
 
@@ -86,7 +89,21 @@ MONARCH_PASSWORD=your-password
 
 ### Multi-Factor Authentication (MFA/2FA)
 
-If your Monarch Money account has MFA enabled, you'll need to use interactive login to authenticate:
+If your Monarch Money account has MFA enabled, you have two options:
+
+#### Option 1: Automatic TOTP (Recommended)
+
+Set your TOTP secret key as an environment variable:
+
+```bash
+export MONARCH_MFA_SECRET="your-totp-secret-key"
+```
+
+This allows fully automated authentication without manual MFA code entry.
+
+#### Option 2: Interactive Login
+
+Use interactive login to authenticate manually:
 
 ```bash
 source venv/bin/activate
@@ -133,6 +150,27 @@ This will:
 4. Display a summary report
 5. Generate time series visualizations in `output/analysis_YYYYMMDD_HHMMSS/`
 
+**Option 3: Cash-Based Budget Analysis**:
+
+```bash
+python cash_budget.py                         # Previous month
+python cash_budget.py --month 2025-12         # Specific month
+python cash_budget.py --month 2025-12 --pdf   # Generate PDF report
+```
+
+Shows TRUE CASH REMAINING = Income - Cash Expenses - CC Payments
+
+**Option 4: Budget Forecast**:
+
+```bash
+python budget_forecast.py                     # Current month
+python budget_forecast.py --month 2026-01     # Specific month
+python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
+```
+
+Shows expected end-of-month cash based on your Monarch budget:
+- Starting Cash + Expected Income - Expected Expenses = Expected End Cash
+
 ### Example Output
 
 ```
@@ -178,21 +216,23 @@ monarch-money-api-cg/
 ├── monarch_budgeting/          # Main Python package
 │   ├── __init__.py            # Package initialization
 │   ├── client.py              # Monarch Money API client wrapper
-│   ├── analyzer.py            # Credit card debt analysis logic
+│   ├── analyzer.py            # Credit card debt & cash budget analysis
 │   ├── visualizer.py          # Visualization and plotting
+│   ├── budget_data.py         # Budget data structures
+│   ├── budget_display.py      # Rich terminal display
+│   ├── budget_pdf.py          # PDF report generation
 │   └── main.py                # Main CLI entry point
-├── output/                    # Generated analysis output (gitignored)
-│   └── analysis_YYYYMMDD_HHMMSS/  # Timestamped run directories
-├── tmp/JS/                    # Original JavaScript implementation (archived)
+├── output/                    # Generated reports (gitignored)
+│   ├── cash_budget_YYYYMM.pdf # Cash budget PDF reports
+│   └── budget_forecast_YYYY-MM.pdf  # Forecast PDF reports
+├── cash_budget.py            # Cash-based budget CLI
+├── budget_forecast.py        # Budget forecast CLI
+├── example.py                # Credit card analysis example
+├── demo_plot.py              # Demo with test data (no auth required)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration
-├── example.py                # Example usage script (requires auth)
-├── demo_plot.py              # Demo with test data (no auth required)
-├── test_data.py              # Dummy API response data for testing
-├── test_basic.py             # Basic tests (no auth required)
 ├── SECURITY.md               # Security guidelines
-├── TEST_RESULTS.md           # Cloud testing results
-├── claude.md                 # Project planning document
+├── CLAUDE.md                 # Project planning document
 └── README.md                 # This file
 ```
 
@@ -307,11 +347,15 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Summary statistics
 - [x] Time series visualizations (payments vs purchases, by card, cumulative debt)
 - [x] Timestamped output directories
+- [x] Cash-based budget view (TRUE CASH REMAINING)
+- [x] Budget forecast (expected end-of-month cash)
+- [x] PDF report generation
+- [x] Category-level breakdowns
 - [ ] Debt payoff projections
-- [ ] Category-level breakdowns
 - [ ] CSV/Excel export
 - [ ] Interactive dashboards
 - [ ] Budget vs. actual comparisons
+- [ ] Multi-month trend analysis
 
 ## Tech Stack
 
@@ -319,6 +363,8 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - **[monarchmoney](https://github.com/hammem/monarchmoney)** - Python library for Monarch Money API
 - **pandas** - Data processing and analysis
 - **numpy** - Numerical computations
+- **matplotlib** - PDF report generation and charts
+- **rich** - Beautiful terminal output with tables and panels
 
 ## Credits
 
