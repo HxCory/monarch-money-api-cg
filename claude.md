@@ -23,7 +23,6 @@ monarch-money-api-cg/
 │   ├── client.py              # Monarch Money API client wrapper
 │   ├── analyzer.py            # Credit card debt analysis logic
 │   └── main.py                # Main CLI entry point
-├── tmp/JS/                    # Original JavaScript implementation (archived)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration
 ├── example.py                # Example usage script
@@ -51,7 +50,6 @@ To be determined - options include:
 - [x] Implemented `CreditCardAnalyzer` for debt analysis
 - [x] Added basic credit card summary and categorization
 - [x] Created example script for running analysis
-- [x] Moved original JavaScript implementation to `tmp/JS/`
 - [x] Fixed API compatibility (gql<4.0, response format parsing)
 - [x] Added time series visualizations (payments vs purchases, by card, cumulative debt)
 - [x] Added timestamped output directories for analysis runs
@@ -164,6 +162,5 @@ python example.py
 ```
 
 ## User Preferences
-- Prefers Python over JavaScript
 - Looking for practical, accurate budgeting insights
 - Working on this via Claude Code on iOS mobile initially

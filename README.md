@@ -1,7 +1,5 @@
 # Monarch Money Custom Budgeting Analysis
 
-![Monarch Image](https://github.com/pbassham/monarch-money-api/raw/main/monarch-image-blue.png)
-
 A Python-based budgeting analysis tool for Monarch Money with enhanced credit card debt tracking and payoff analysis.
 
 > **Note**: This is an unofficial tool using the unofficial Monarch Money API. It is not endorsed by Monarch Money and may break at any time. Use at your own risk.
@@ -405,7 +403,7 @@ This is a personal project, but contributions are welcome! If you have ideas for
 
 This project uses the [monarchmoney](https://github.com/hammem/monarchmoney) Python library by @hammem for accessing the Monarch Money API.
 
-The original JavaScript implementation (now in `tmp/JS/`) was forked from [pbassham/monarch-money-api](https://github.com/pbassham/monarch-money-api).
+This project was inspired by [pbassham/monarch-money-api](https://github.com/pbassham/monarch-money-api).
 
 ## License
 

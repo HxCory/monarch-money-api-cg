@@ -56,7 +56,3 @@ custom_budget.json
 session.pickle
 .session
 .mm
-
-# JavaScript (legacy - moved to tmp/JS)
-node_modules
-.vercel
