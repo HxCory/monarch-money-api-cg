@@ -21,6 +21,7 @@ class MonarchClient:
         self._authenticated = False
         self._email = None
         self._password = None
+        self._mfa_secret = None
 
     async def _do_login(self, email: str, password: str,
                         use_saved_session: bool, mfa_secret_key: Optional[str],
@@ -62,6 +63,7 @@ class MonarchClient:
         # Get credentials from env vars if not provided
         self._email = email or os.environ.get('MONARCH_EMAIL')
         self._password = password or os.environ.get('MONARCH_PASSWORD')
+        self._mfa_secret = mfa_secret_key or os.environ.get('MONARCH_MFA_SECRET')
 
         if use_saved_session:
             # First, try to use saved session WITHOUT passing credentials
@@ -76,7 +78,7 @@ class MonarchClient:
 
         # No valid session, need to login with credentials
         await self._do_login(self._email, self._password,
-                            use_saved_session=False, mfa_secret_key=mfa_secret_key,
+                            use_saved_session=False, mfa_secret_key=self._mfa_secret,
                             prompt_for_mfa=prompt_for_mfa)
         self._authenticated = True
         return True
@@ -88,7 +90,8 @@ class MonarchClient:
             # Create new client to clear stale session
             self.mm = MonarchMoney()
             await self._do_login(self._email, self._password,
-                               use_saved_session=False, mfa_secret_key=None, prompt_for_mfa=True)
+                               use_saved_session=False, mfa_secret_key=self._mfa_secret,
+                               prompt_for_mfa=True)
             self._authenticated = True
 
     async def _api_call_with_retry(self, api_func, *args, **kwargs):

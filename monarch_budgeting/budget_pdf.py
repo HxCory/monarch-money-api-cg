@@ -57,7 +57,8 @@ CC Payments:         {self._format_currency(metrics['cc_payments'])}
                 fontfamily='monospace',
                 bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
 
-    def _create_table_page(self, fig, df: pd.DataFrame, title: str, columns: List[str]):
+    def _create_table_page(self, fig, df: pd.DataFrame, title: str, columns: List[str],
+                           show_total: bool = True):
         """Create a page with a table."""
         ax = fig.add_subplot(111)
         ax.axis('off')
@@ -79,6 +80,18 @@ CC Payments:         {self._format_currency(metrics['cc_payments'])}
                     row_data.append(str(val))
             table_data.append(row_data)
 
+        # Add total row if requested
+        if show_total and not df.empty:
+            total_row = []
+            for col in columns:
+                if col == 'category_name':
+                    total_row.append('TOTAL')
+                elif col in df.columns and df[col].dtype in ['float64', 'int64', 'float', 'int']:
+                    total_row.append(self._format_currency(df[col].sum()))
+                else:
+                    total_row.append('')
+            table_data.append(total_row)
+
         # Create table
         col_labels = [c.replace('_', ' ').title() for c in columns]
         table = ax.table(cellText=table_data,
@@ -91,10 +104,16 @@ CC Payments:         {self._format_currency(metrics['cc_payments'])}
         table.set_fontsize(9)
         table.scale(1.2, 1.5)
 
-        # Style header
-        for i, key in enumerate(table_data[0] if table_data else []):
+        # Style header row
+        for i in range(len(columns)):
             table[(0, i)].set_facecolor('#4472C4')
             table[(0, i)].set_text_props(color='white', fontweight='bold')
+
+        # Style total row (last row)
+        if show_total and table_data:
+            last_row = len(table_data)
+            for i in range(len(columns)):
+                table[(last_row, i)].set_text_props(fontweight='bold')
 
     def _create_balance_chart(self, fig, account_histories: Dict[str, List[Dict]],
                               start_date: datetime, end_date: datetime, month: str):
