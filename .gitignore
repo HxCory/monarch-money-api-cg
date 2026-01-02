@@ -47,6 +47,11 @@ Thumbs.db
 output/
 data/
 
+# User config files (contain personal financial data)
+# Copy from *.example.json to create your own
+debt_config.json
+custom_budget.json
+
 # Session/auth files
 session.pickle
 .session

@@ -11,6 +11,7 @@ Usage:
     python budget_forecast.py                    # Current month
     python budget_forecast.py --month 2026-01    # Specific month
     python budget_forecast.py --month 2026-01 --pdf  # Generate PDF
+    python budget_forecast.py --use-local-budget  # Use custom_budget.json
 """
 
 import argparse
@@ -18,7 +19,6 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
-import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -27,26 +27,12 @@ from rich.table import Table
 from rich.panel import Panel
 
 from monarch_budgeting.client import MonarchClient
-
-
-def parse_month(month_str: str) -> tuple[datetime, datetime]:
-    """Parse month string (YYYY-MM) into start and end dates."""
-    try:
-        year, month = map(int, month_str.split('-'))
-        start = datetime(year, month, 1)
-
-        # Get last day of month
-        if month == 12:
-            end = datetime(year + 1, 1, 1)
-        else:
-            end = datetime(year, month + 1, 1)
-
-        from datetime import timedelta
-        end = end - timedelta(days=1)
-
-        return start, end
-    except (ValueError, AttributeError):
-        raise ValueError(f"Invalid month format: {month_str}. Use YYYY-MM (e.g., 2026-01)")
+from monarch_budgeting.utils import (
+    format_currency,
+    parse_month,
+    get_current_month_range,
+    load_custom_budget,
+)
 
 
 def parse_budget_data(budget_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,11 +76,20 @@ def parse_budget_data(budget_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def format_currency(amount: float) -> str:
-    """Format a number as currency."""
-    if amount < 0:
-        return f"-${abs(amount):,.2f}"
-    return f"${amount:,.2f}"
+def convert_custom_budget(custom_budget: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert custom budget JSON format to internal format."""
+    return {
+        'total_income': custom_budget.get('total_income', 0),
+        'total_expenses': custom_budget.get('total_expenses', 0),
+        'income_categories': [
+            {'name': cat['name'], 'group': cat['group'], 'planned': cat['amount']}
+            for cat in custom_budget.get('income_categories', [])
+        ],
+        'expense_categories': [
+            {'name': cat['name'], 'group': cat['group'], 'planned': cat['amount']}
+            for cat in custom_budget.get('expense_categories', [])
+        ]
+    }
 
 
 def generate_forecast_pdf(filepath: str, budget: Dict[str, Any],
@@ -244,26 +239,22 @@ Starting Cash:      {format_currency(starting_cash)}
         console.print(expense_table)
 
 
-async def run_forecast(month: str = None, pdf: bool = False):
+async def run_forecast(month: str = None, pdf: bool = False, use_local_budget: bool = False):
     """Run the budget forecast analysis."""
     console = Console()
 
     console.print()
-    console.print("[bold]Budget Forecast[/bold]")
+    if use_local_budget:
+        console.print("[bold]Budget Forecast[/bold] [dim](using local budget)[/dim]")
+    else:
+        console.print("[bold]Budget Forecast[/bold]")
     console.print()
 
     # Parse month or use current month
     if month:
         start_date, end_date = parse_month(month)
     else:
-        today = datetime.now()
-        start_date = datetime(today.year, today.month, 1)
-        if today.month == 12:
-            end_date = datetime(today.year + 1, 1, 1)
-        else:
-            end_date = datetime(today.year, today.month + 1, 1)
-        from datetime import timedelta
-        end_date = end_date - timedelta(days=1)
+        start_date, end_date = get_current_month_range()
 
     month_str = start_date.strftime("%B %Y")
     month_key = start_date.strftime("%Y-%m")
@@ -301,12 +292,24 @@ async def run_forecast(month: str = None, pdf: bool = False):
 
     console.print(f"[green]✓[/green] Starting cash: {format_currency(starting_cash)}")
 
-    # Get budget data
-    console.print("[dim]Fetching budget data...[/dim]")
-    budget_data = await client.get_budget_data(month_key)
-    budget = parse_budget_data(budget_data)
-    console.print(f"[green]✓[/green] Found {len(budget['income_categories'])} income, "
-                  f"{len(budget['expense_categories'])} expense categories")
+    # Get budget data - either from API or local file
+    if use_local_budget:
+        console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
+        try:
+            custom_budget = load_custom_budget()
+            budget = convert_custom_budget(custom_budget)
+            console.print(f"[green]✓[/green] Loaded custom budget: {len(budget['income_categories'])} income, "
+                          f"{len(budget['expense_categories'])} expense categories")
+        except FileNotFoundError:
+            console.print("[red]Error: custom_budget.json not found![/red]")
+            console.print("[dim]Create the file or run without --use-local-budget[/dim]")
+            return
+    else:
+        console.print("[dim]Fetching budget data...[/dim]")
+        budget_data = await client.get_budget_data(month_key)
+        budget = parse_budget_data(budget_data)
+        console.print(f"[green]✓[/green] Found {len(budget['income_categories'])} income, "
+                      f"{len(budget['expense_categories'])} expense categories")
     console.print()
 
     # Display forecast
@@ -317,7 +320,10 @@ async def run_forecast(month: str = None, pdf: bool = False):
         from pathlib import Path
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
-        pdf_filename = f"budget_forecast_{month_key}.pdf"
+        if use_local_budget:
+            pdf_filename = f"budget_forecast_custom_{month_key}.pdf"
+        else:
+            pdf_filename = f"budget_forecast_{month_key}.pdf"
         pdf_filepath = output_dir / pdf_filename
 
         console.print()
@@ -339,11 +345,16 @@ def main():
         action="store_true",
         help="Generate PDF report in output/ directory"
     )
+    parser.add_argument(
+        "--use-local-budget", "-l",
+        action="store_true",
+        help="Use custom_budget.json instead of fetching from Monarch Money"
+    )
 
     args = parser.parse_args()
 
     try:
-        asyncio.run(run_forecast(month=args.month, pdf=args.pdf))
+        asyncio.run(run_forecast(month=args.month, pdf=args.pdf, use_local_budget=args.use_local_budget))
     except KeyboardInterrupt:
         print("\nCancelled.")
     except Exception as e:
