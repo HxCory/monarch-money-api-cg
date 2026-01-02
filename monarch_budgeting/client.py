@@ -5,9 +5,11 @@ This module provides a convenient interface to the Monarch Money API
 using the monarchmoney library.
 """
 
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from monarchmoney import MonarchMoney
+from monarchmoney.monarchmoney import RequireMFAException
 
 
 class MonarchClient:
@@ -17,36 +19,80 @@ class MonarchClient:
         """Initialize the Monarch Money client."""
         self.mm = MonarchMoney()
         self._authenticated = False
+        self._email = None
+        self._password = None
+
+    async def _do_login(self, email: str, password: str,
+                        use_saved_session: bool, mfa_secret_key: Optional[str],
+                        prompt_for_mfa: bool) -> None:
+        """Internal login helper that handles MFA."""
+        try:
+            await self.mm.login(
+                email=email,
+                password=password,
+                use_saved_session=use_saved_session,
+                mfa_secret_key=mfa_secret_key
+            )
+        except RequireMFAException:
+            if not prompt_for_mfa:
+                raise
+            if not email or not password:
+                raise ValueError("Email and password required for MFA. Set MONARCH_EMAIL and MONARCH_PASSWORD env vars.")
+
+            # Prompt user for MFA code
+            mfa_code = input("Enter MFA code: ").strip()
+            await self.mm.multi_factor_authenticate(email, password, mfa_code)
 
     async def login(self, email: Optional[str] = None, password: Optional[str] = None,
-                   use_saved_session: bool = True, mfa_secret_key: Optional[str] = None) -> bool:
+                   use_saved_session: bool = True, mfa_secret_key: Optional[str] = None,
+                   prompt_for_mfa: bool = True) -> bool:
         """
         Login to Monarch Money.
 
         Args:
-            email: User email (optional if using saved session)
-            password: User password (optional if using saved session)
+            email: User email (uses MONARCH_EMAIL env var if not provided)
+            password: User password (uses MONARCH_PASSWORD env var if not provided)
             use_saved_session: Whether to try using a saved session first
             mfa_secret_key: TOTP secret for MFA (optional)
+            prompt_for_mfa: If True, prompt user for MFA code when required
 
         Returns:
             True if login successful
         """
-        # The library's login() method handles saved sessions automatically
-        await self.mm.login(
-            email=email,
-            password=password,
-            use_saved_session=use_saved_session,
-            mfa_secret_key=mfa_secret_key
-        )
+        # Get credentials from env vars if not provided
+        self._email = email or os.environ.get('MONARCH_EMAIL')
+        self._password = password or os.environ.get('MONARCH_PASSWORD')
+
+        await self._do_login(self._email, self._password, use_saved_session, mfa_secret_key, prompt_for_mfa)
         self._authenticated = True
         return True
+
+    async def _ensure_authenticated(self) -> None:
+        """Re-authenticate if session has expired (called on 401 errors)."""
+        if self._email and self._password:
+            print("Session expired, re-authenticating...")
+            # Create new client to clear stale session
+            self.mm = MonarchMoney()
+            await self._do_login(self._email, self._password,
+                               use_saved_session=False, mfa_secret_key=None, prompt_for_mfa=True)
+            self._authenticated = True
+
+    async def _api_call_with_retry(self, api_func, *args, **kwargs):
+        """Make an API call, retrying with re-auth on 401."""
+        from gql.transport.exceptions import TransportServerError
+        try:
+            return await api_func(*args, **kwargs)
+        except TransportServerError as e:
+            if '401' in str(e):
+                await self._ensure_authenticated()
+                return await api_func(*args, **kwargs)
+            raise
 
     async def get_accounts(self) -> List[Dict[str, Any]]:
         """Get all accounts."""
         if not self._authenticated:
             raise RuntimeError("Must login first")
-        result = await self.mm.get_accounts()
+        result = await self._api_call_with_retry(self.mm.get_accounts)
         # API returns {'accounts': [...], 'householdPreferences': ...}
         return result.get('accounts', [])
 
@@ -81,7 +127,8 @@ class MonarchClient:
         if not end_date:
             end_date = datetime.now()
 
-        result = await self.mm.get_transactions(
+        result = await self._api_call_with_retry(
+            self.mm.get_transactions,
             start_date=start_date.strftime('%Y-%m-%d'),
             end_date=end_date.strftime('%Y-%m-%d'),
             account_ids=account_ids,
@@ -105,10 +152,12 @@ class MonarchClient:
         if not self._authenticated:
             raise RuntimeError("Must login first")
 
-        return await self.mm.get_budgets(start_date=start_date, end_date=end_date)
+        return await self._api_call_with_retry(
+            self.mm.get_budgets, start_date=start_date, end_date=end_date
+        )
 
     async def get_transaction_categories(self) -> List[Dict[str, Any]]:
         """Get all transaction categories."""
         if not self._authenticated:
             raise RuntimeError("Must login first")
-        return await self.mm.get_transaction_categories()
+        return await self._api_call_with_retry(self.mm.get_transaction_categories)

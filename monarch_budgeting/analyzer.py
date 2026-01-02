@@ -433,7 +433,11 @@ class CashBudgetAnalyzer:
 
     This provides a more accurate view of actual cash remaining by treating
     credit card spending separately from when cash actually leaves (CC payments).
+    Uses actual cash account balances rather than income-based calculations.
     """
+
+    # Categories to exclude from income/expense calculations
+    EXCLUDED_CATEGORIES = {'Dividends & Capital Gains'}
 
     def __init__(self,
                  transactions: List[Dict[str, Any]],
@@ -457,12 +461,25 @@ class CashBudgetAnalyzer:
             if acc.get('type', {}).get('name') == 'credit'
         )
 
+        # Identify cash accounts (checking, savings, cash)
+        self.cash_accounts = [
+            acc for acc in accounts
+            if acc.get('type', {}).get('name') in ('cash', 'checking', 'savings', 'depository')
+        ]
+
         # Find the credit card payment category
         self.cc_payment_category_id = None
         for cat_id, cat in categories.items():
             if cat.is_cc_payment:
                 self.cc_payment_category_id = cat_id
                 break
+
+    def get_cash_available(self) -> float:
+        """Get total current balance from all cash accounts."""
+        return sum(
+            acc.get('currentBalance', 0) or 0
+            for acc in self.cash_accounts
+        )
 
     def _prepare_dataframe(self) -> pd.DataFrame:
         """Convert transactions to DataFrame with necessary computed columns."""
@@ -493,6 +510,10 @@ class CashBudgetAnalyzer:
 
         return df
 
+    def _is_excluded_category(self, category_name: str) -> bool:
+        """Check if a category should be excluded from calculations."""
+        return category_name in self.EXCLUDED_CATEGORIES
+
     def calculate_top_level_metrics(self,
                                     start_date: Optional[datetime] = None,
                                     end_date: Optional[datetime] = None) -> Dict[str, float]:
@@ -500,7 +521,7 @@ class CashBudgetAnalyzer:
         Calculate the top-level budget metrics.
 
         Returns dict with:
-        - total_income: All positive amounts (income)
+        - total_income: All positive amounts (excluding Dividends & Capital Gains)
         - total_expenses: All negative amounts (expenses, absolute value)
         - cc_expenses: Expenses on credit card accounts
         - cash_expenses: Expenses on non-CC accounts
@@ -527,8 +548,9 @@ class CashBudgetAnalyzer:
         if end_date:
             df = df[df['date'] <= pd.to_datetime(end_date)]
 
-        # Income: positive amounts (excluding CC payments which are transfers)
+        # Income: positive amounts (excluding CC payments and excluded categories)
         income_df = df[(df['amount'] > 0) & (~df['is_cc_payment'])]
+        income_df = income_df[~income_df['category_name'].apply(self._is_excluded_category)]
         total_income = income_df['amount'].sum()
 
         # All expenses: negative amounts (excluding CC payment category)
@@ -641,13 +663,43 @@ class CashBudgetAnalyzer:
     def get_income_breakdown(self,
                              start_date: Optional[datetime] = None,
                              end_date: Optional[datetime] = None) -> pd.DataFrame:
-        """Get just the income categories breakdown."""
+        """Get just the income categories breakdown (excluding Dividends & Capital Gains)."""
         breakdown = self.calculate_category_breakdown(start_date, end_date)
-        return breakdown[breakdown['category_type'] == 'income']
+        income = breakdown[breakdown['category_type'] == 'income']
+        # Exclude categories that shouldn't be shown
+        return income[~income['category_name'].isin(self.EXCLUDED_CATEGORIES)]
 
     def get_expense_breakdown(self,
                               start_date: Optional[datetime] = None,
-                              end_date: Optional[datetime] = None) -> pd.DataFrame:
-        """Get just the expense categories breakdown."""
+                              end_date: Optional[datetime] = None,
+                              include_cc_payments: bool = True) -> pd.DataFrame:
+        """Get expense categories breakdown, optionally including CC payments."""
         breakdown = self.calculate_category_breakdown(start_date, end_date)
-        return breakdown[breakdown['category_type'] == 'expense']
+        expenses = breakdown[breakdown['category_type'] == 'expense']
+
+        if include_cc_payments:
+            # Calculate CC payments to add as a row
+            df = self._prepare_dataframe()
+            if not df.empty:
+                if start_date:
+                    df = df[df['date'] >= pd.to_datetime(start_date)]
+                if end_date:
+                    df = df[df['date'] <= pd.to_datetime(end_date)]
+
+                # CC Payments: outflows from non-CC accounts in CC payment category
+                cc_payment_df = df[df['is_cc_payment'] & ~df['is_cc_account'] & (df['amount'] < 0)]
+                cc_payments = abs(cc_payment_df['amount'].sum())
+
+                if cc_payments > 0:
+                    cc_payment_row = pd.DataFrame([{
+                        'category_id': 'cc_payments',
+                        'category_name': 'Credit Card Payments',
+                        'group_name': 'Transfers',
+                        'category_type': 'expense',
+                        'actual_amount': cc_payments,
+                        'cc_amount': 0,
+                        'cash_amount': cc_payments
+                    }])
+                    expenses = pd.concat([expenses, cc_payment_row], ignore_index=True)
+
+        return expenses
