@@ -50,12 +50,14 @@ st.set_page_config(
 
 
 def get_default_budget() -> dict:
-    """Get default budget structure."""
+    """Get default budget structure with pre-populated categories."""
     return {
         "total_income": 0,
         "total_expenses": 0,
         "income_categories": [],
-        "expense_categories": [],
+        "expense_categories": [
+            {"name": "Credit Card Payments", "group": "Financial", "amount": 0},
+        ],
     }
 
 

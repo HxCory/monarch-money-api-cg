@@ -1,7 +1,7 @@
 {
   "month": "2026-01",
   "total_income": 1000.0,
-  "total_expenses": 800.0,
+  "total_expenses": 850.0,
   "income_categories": [
     {
       "name": "Paychecks",
@@ -14,6 +14,11 @@
       "name": "Rent",
       "group": "Housing",
       "amount": 500.0
+    },
+    {
+      "name": "Credit Card Payments",
+      "group": "Financial",
+      "amount": 50.0
     },
     {
       "name": "Loan Repayment",
