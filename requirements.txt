@@ -14,3 +14,7 @@ openpyxl
 
 # Terminal UI
 rich
+
+# Web UI
+streamlit>=1.28.0
+nest_asyncio  # For running async code in Streamlit

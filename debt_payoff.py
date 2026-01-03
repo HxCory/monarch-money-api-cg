@@ -37,6 +37,7 @@ from monarch_budgeting.utils import (
     parse_month,
     get_current_month_range,
     load_custom_budget,
+    load_month_budget,
     get_custom_budget_category_amount,
 )
 
@@ -447,16 +448,24 @@ async def run_debt_payoff(month: str = None, debt_type: str = 'cc', use_local_bu
 
     # Get budget data - either from API or local file
     if use_local_budget:
-        console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
-        try:
-            custom_budget = load_custom_budget()
+        # Try month-specific budget first, then fall back to custom_budget.json
+        custom_budget = load_month_budget(month_key)
+        if custom_budget:
+            console.print(f"[dim]Loading budget from budgets/{month_key}.json...[/dim]")
             expected_income = custom_budget.get('total_income', 0)
             expected_expenses = custom_budget.get('total_expenses', 0)
-            console.print(f"[green]✓[/green] Loaded custom budget")
-        except FileNotFoundError:
-            console.print("[red]Error: custom_budget.json not found![/red]")
-            console.print("[dim]Create the file or run without --use-local-budget[/dim]")
-            return
+            console.print(f"[green]✓[/green] Loaded month budget")
+        else:
+            console.print("[dim]Loading custom budget from custom_budget.json...[/dim]")
+            try:
+                custom_budget = load_custom_budget()
+                expected_income = custom_budget.get('total_income', 0)
+                expected_expenses = custom_budget.get('total_expenses', 0)
+                console.print(f"[green]✓[/green] Loaded custom budget")
+            except FileNotFoundError:
+                console.print("[red]Error: No budget found![/red]")
+                console.print(f"[dim]Create budgets/{month_key}.json or custom_budget.json[/dim]")
+                return
     else:
         console.print("[dim]Fetching budget data...[/dim]")
         budget_data = await client.get_budget_data(month_key)

@@ -26,6 +26,7 @@ Monarch Money is great, but tracking credit card debt payoff can be tricky. This
 ✅ **PDF reports** - Generate professional PDF reports with charts
 ✅ **Debt payoff projections** - See how fast you can pay off CC debt and loans at different allocation rates
 ✅ **Custom budget overrides** - Use a local JSON file to override Monarch budgets
+✅ **Streamlit Budget Editor** - Interactive web UI for editing budget categories with live forecast preview
 ✅ Text-based reporting with Rich terminal tables
 
 ## Installation
@@ -200,6 +201,24 @@ Shows how quickly you can pay off debt at different allocation percentages (25%,
 
 Generates payoff timeline plots saved to `output/`.
 
+**Option 6: Budget Editor (Web UI)**:
+
+```bash
+streamlit run budget_editor.py
+```
+
+Opens a web browser with an interactive budget editor:
+- Edit income and expense categories in a spreadsheet-like table
+- Auto-calculated totals update as you type
+- Select month from dropdown (supports past 12 months and next 3 months)
+- **Sync with Monarch** to fetch starting cash AND actual spending from API
+- **Budget vs Actual tracking** - See Actual and Remaining columns alongside Planned amounts
+- See forecast preview: Starting Cash + Income - Expenses = Expected End
+- Save budgets per-month to `budgets/YYYY-MM.json`
+- Copy budgets from previous months
+
+> **Note**: Run a CLI tool first (e.g., `python budget_forecast.py`) to authenticate before using the web UI.
+
 ### Example Output
 
 ```
@@ -256,6 +275,9 @@ monarch-money-api-cg/
 │   ├── cash_budget_YYYYMM.pdf # Cash budget PDF reports
 │   ├── budget_forecast_YYYY-MM.pdf  # Forecast PDF reports
 │   └── cc_payoff_YYYY-MM.png  # Debt payoff projection plots
+├── budgets/                   # Per-month budget files (gitignored)
+│   └── 2026-01.json          # Budget for January 2026
+├── budget_editor.py          # Streamlit web UI for editing budgets
 ├── cash_budget.py            # Cash-based budget CLI
 ├── budget_forecast.py        # Budget forecast CLI
 ├── debt_payoff.py            # Debt payoff projections CLI
@@ -387,8 +409,9 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Category-level breakdowns
 - [x] Debt payoff projections (CC and loans with configurable interest rates)
 - [x] Custom budget overrides (local JSON files)
+- [x] Streamlit budget editor (interactive web UI with forecast preview)
+- [x] Budget vs. actual comparisons (Sync with Monarch to see Actual/Remaining)
 - [ ] Multi-month trend analysis
-- [ ] Budget vs. actual comparisons
 
 ## Tech Stack
 
@@ -398,6 +421,7 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - **numpy** - Numerical computations
 - **matplotlib** - PDF report generation and charts
 - **rich** - Beautiful terminal output with tables and panels
+- **streamlit** - Interactive web UI for budget editing
 
 ## Credits
 
