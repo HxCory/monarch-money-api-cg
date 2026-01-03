@@ -99,14 +99,28 @@ class AuthError(Exception):
     pass
 
 
-async def fetch_starting_cash_async(month: str) -> float:
-    """Fetch starting cash balance from Monarch Money API."""
+async def sync_with_monarch_async(month: str) -> dict:
+    """
+    Sync with Monarch Money API to fetch starting cash and budget actuals.
+
+    Returns:
+        Dict with 'starting_cash', 'income_actuals', 'expense_actuals', 'total_income_actual', 'total_expenses_actual'
+    """
     start_date, _ = parse_month(month)
+    month_key = start_date.strftime("%Y-%m")
 
     client = get_monarch_client()
     await _login_client(client)
 
-    # Get aggregate snapshot for start of month
+    result = {
+        'starting_cash': 0,
+        'income_actuals': {},  # category_name -> actual_amount
+        'expense_actuals': {},  # category_name -> actual_amount
+        'total_income_actual': 0,
+        'total_expenses_actual': 0,
+    }
+
+    # Get starting cash balance
     snapshots = await client.get_aggregate_snapshots(
         start_date=start_date,
         end_date=start_date,
@@ -115,23 +129,47 @@ async def fetch_starting_cash_async(month: str) -> float:
 
     snapshot_list = snapshots.get('aggregateSnapshots', [])
     if snapshot_list:
-        return snapshot_list[0].get('balance', 0)
+        result['starting_cash'] = snapshot_list[0].get('balance', 0)
+    else:
+        # Try previous day if no snapshot for start
+        prev_day = start_date - timedelta(days=1)
+        snapshots = await client.get_aggregate_snapshots(
+            start_date=prev_day,
+            end_date=prev_day,
+            account_type='depository'
+        )
+        snapshot_list = snapshots.get('aggregateSnapshots', [])
+        result['starting_cash'] = snapshot_list[0].get('balance', 0) if snapshot_list else 0
 
-    # Try previous day if no snapshot for start
-    prev_day = start_date - timedelta(days=1)
-    snapshots = await client.get_aggregate_snapshots(
-        start_date=prev_day,
-        end_date=prev_day,
-        account_type='depository'
-    )
-    snapshot_list = snapshots.get('aggregateSnapshots', [])
-    return snapshot_list[0].get('balance', 0) if snapshot_list else 0
+    # Get budget data with actuals
+    budget_data = await client.get_budget_data(month_key)
+
+    # Parse totals
+    totals = budget_data.get('totalsByMonth', [])
+    if totals:
+        result['total_income_actual'] = totals[0].get('totalIncome', {}).get('actualAmount', 0)
+        result['total_expenses_actual'] = totals[0].get('totalExpenses', {}).get('actualAmount', 0)
+
+    # Parse category actuals
+    for cat_data in budget_data.get('monthlyAmountsByCategory', []):
+        category = cat_data.get('category', {})
+        cat_name = category.get('name', 'Unknown')
+        cat_type = category.get('group', {}).get('type', 'expense')
+        amounts = cat_data.get('monthlyAmounts', [{}])[0]
+        actual = amounts.get('actualAmount', 0)
+
+        if cat_type == 'income':
+            result['income_actuals'][cat_name] = actual
+        elif cat_type == 'expense':
+            result['expense_actuals'][cat_name] = actual
+
+    return result
 
 
-def fetch_starting_cash(month: str) -> float:
-    """Synchronous wrapper to fetch starting cash."""
+def sync_with_monarch(month: str) -> dict:
+    """Synchronous wrapper to sync with Monarch."""
     loop = asyncio.get_event_loop()
-    return loop.run_until_complete(fetch_starting_cash_async(month))
+    return loop.run_until_complete(sync_with_monarch_async(month))
 
 
 def load_initial_budget(month: str) -> dict:
@@ -167,7 +205,13 @@ def df_to_categories(df: pd.DataFrame) -> list:
 
 
 def categories_to_df(categories: list, is_income: bool = False) -> pd.DataFrame:
-    """Convert list of category dicts to DataFrame."""
+    """
+    Convert list of category dicts to DataFrame for editing.
+
+    Args:
+        categories: List of category dicts with 'name', 'group', 'amount'
+        is_income: Whether these are income categories (affects default group)
+    """
     if not categories:
         return pd.DataFrame(columns=['name', 'group', 'amount'])
 
@@ -180,9 +224,35 @@ def categories_to_df(categories: list, is_income: bool = False) -> pd.DataFrame:
         df['group'] = 'Income' if is_income else 'Other'
     if 'amount' not in df.columns:
         df['amount'] = 0.0
+    else:
+        # Ensure amount is float
+        df['amount'] = df['amount'].astype(float)
 
-    # Reorder columns
+    # Return only editable columns
     return df[['name', 'group', 'amount']]
+
+
+def build_actuals_df(edited_df: pd.DataFrame, actuals: dict) -> pd.DataFrame:
+    """
+    Build a read-only DataFrame showing actual vs remaining.
+
+    Args:
+        edited_df: The edited DataFrame from data_editor (has current planned values)
+        actuals: Dict mapping category names to actual amounts
+
+    Returns:
+        DataFrame with Actual, Remaining columns (to display alongside editor)
+    """
+    if edited_df.empty:
+        return pd.DataFrame(columns=['Actual', 'Remaining'])
+
+    actual_values = edited_df['name'].apply(lambda x: float(actuals.get(x, 0.0)))
+    result = pd.DataFrame({
+        'Actual': actual_values,
+        'Remaining': edited_df['amount'] - actual_values,
+    })
+
+    return result
 
 
 def main():
@@ -223,12 +293,25 @@ def main():
     if 'budget' not in st.session_state or st.session_state.get('current_month') != selected_month:
         st.session_state.budget = load_initial_budget(selected_month)
         st.session_state.current_month = selected_month
+        # Clear monarch data when month changes
+        st.session_state.monarch_data = None
+
+    # Initialize monarch data state
+    if 'monarch_data' not in st.session_state:
+        st.session_state.monarch_data = None
 
     # Display current month
     st.header(f"Budget for {selected_month}")
 
     # Create two columns for income and expenses
     col1, col2 = st.columns(2)
+
+    # Get actuals if synced
+    income_actuals = None
+    expense_actuals = None
+    if st.session_state.monarch_data:
+        income_actuals = st.session_state.monarch_data.get('income_actuals', {})
+        expense_actuals = st.session_state.monarch_data.get('expense_actuals', {})
 
     with col1:
         st.subheader("Income")
@@ -238,74 +321,138 @@ def main():
             is_income=True
         )
 
-        edited_income = st.data_editor(
-            income_df,
-            column_config={
-                "name": st.column_config.TextColumn(
-                    "Category",
-                    help="Name of the income category",
-                    width="medium",
-                ),
-                "group": st.column_config.SelectboxColumn(
-                    "Group",
-                    help="Category group",
-                    options=CATEGORY_GROUPS,
-                    width="medium",
-                ),
-                "amount": st.column_config.NumberColumn(
-                    "Amount",
-                    help="Monthly amount",
-                    format="$%.2f",
-                    min_value=0,
-                    width="small",
-                ),
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            key="income_editor",
-        )
+        # Calculate row count for consistent height
+        income_row_count = max(len(income_df) + 1, 3)  # +1 for add row, min 3
+
+        # Side-by-side layout: editor (left) | actuals (right)
+        if income_actuals is not None:
+            editor_col, actuals_col = st.columns([3, 1])
+        else:
+            editor_col = st.container()
+            actuals_col = None
+
+        with editor_col:
+            edited_income = st.data_editor(
+                income_df,
+                column_config={
+                    "name": st.column_config.TextColumn(
+                        "Category",
+                        help="Name of the income category",
+                        width="medium",
+                    ),
+                    "group": st.column_config.SelectboxColumn(
+                        "Group",
+                        help="Category group",
+                        options=CATEGORY_GROUPS,
+                        width="small",
+                    ),
+                    "amount": st.column_config.NumberColumn(
+                        "Planned",
+                        help="Planned monthly amount",
+                        format="$%.2f",
+                        min_value=0,
+                        width="small",
+                    ),
+                },
+                num_rows="dynamic",
+                use_container_width=True,
+                key="income_editor",
+                height=(income_row_count * 35) + 40,  # Approximate row height
+            )
+
+        # Show actuals alongside editor if synced
+        if income_actuals is not None and actuals_col is not None:
+            with actuals_col:
+                actuals_df = build_actuals_df(edited_income, income_actuals)
+                st.dataframe(
+                    actuals_df,
+                    column_config={
+                        "Actual": st.column_config.NumberColumn(format="$%.2f"),
+                        "Remaining": st.column_config.NumberColumn(format="$%.2f"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    height=(income_row_count * 35) + 40,
+                )
 
         # Calculate and display income total
         total_income = edited_income['amount'].sum() if not edited_income.empty else 0
-        st.metric("Total Income", format_currency(total_income))
+        if income_actuals is not None:
+            total_income_actual = st.session_state.monarch_data.get('total_income_actual', 0)
+            st.metric("Total Income", format_currency(total_income),
+                     delta=f"Actual: {format_currency(total_income_actual)}")
+        else:
+            st.metric("Total Income", format_currency(total_income))
 
     with col2:
         st.subheader("Expenses")
 
         expense_df = categories_to_df(
-            st.session_state.budget.get('expense_categories', [])
+            st.session_state.budget.get('expense_categories', []),
         )
 
-        edited_expenses = st.data_editor(
-            expense_df,
-            column_config={
-                "name": st.column_config.TextColumn(
-                    "Category",
-                    help="Name of the expense category",
-                    width="medium",
-                ),
-                "group": st.column_config.SelectboxColumn(
-                    "Group",
-                    help="Category group",
-                    options=CATEGORY_GROUPS,
-                    width="medium",
-                ),
-                "amount": st.column_config.NumberColumn(
-                    "Amount",
-                    help="Monthly amount",
-                    format="$%.2f",
-                    min_value=0,
-                    width="small",
-                ),
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            key="expense_editor",
-        )
+        # Calculate row count for consistent height
+        expense_row_count = max(len(expense_df) + 1, 3)  # +1 for add row, min 3
+
+        # Side-by-side layout: editor (left) | actuals (right)
+        if expense_actuals is not None:
+            editor_col, actuals_col = st.columns([3, 1])
+        else:
+            editor_col = st.container()
+            actuals_col = None
+
+        with editor_col:
+            edited_expenses = st.data_editor(
+                expense_df,
+                column_config={
+                    "name": st.column_config.TextColumn(
+                        "Category",
+                        help="Name of the expense category",
+                        width="medium",
+                    ),
+                    "group": st.column_config.SelectboxColumn(
+                        "Group",
+                        help="Category group",
+                        options=CATEGORY_GROUPS,
+                        width="small",
+                    ),
+                    "amount": st.column_config.NumberColumn(
+                        "Planned",
+                        help="Planned monthly amount",
+                        format="$%.2f",
+                        min_value=0,
+                        width="small",
+                    ),
+                },
+                num_rows="dynamic",
+                use_container_width=True,
+                key="expense_editor",
+                height=(expense_row_count * 35) + 40,  # Approximate row height
+            )
+
+        # Show actuals alongside editor if synced
+        if expense_actuals is not None and actuals_col is not None:
+            with actuals_col:
+                actuals_df = build_actuals_df(edited_expenses, expense_actuals)
+                st.dataframe(
+                    actuals_df,
+                    column_config={
+                        "Actual": st.column_config.NumberColumn(format="$%.2f"),
+                        "Remaining": st.column_config.NumberColumn(format="$%.2f"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    height=(expense_row_count * 35) + 40,
+                )
 
         # Calculate and display expense total
         total_expenses = edited_expenses['amount'].sum() if not edited_expenses.empty else 0
-        st.metric("Total Expenses", format_currency(total_expenses))
+        if expense_actuals is not None:
+            total_expenses_actual = st.session_state.monarch_data.get('total_expenses_actual', 0)
+            st.metric("Total Expenses", format_currency(total_expenses),
+                     delta=f"Actual: {format_currency(total_expenses_actual)}")
+        else:
+            st.metric("Total Expenses", format_currency(total_expenses))
 
     # Summary section
     st.divider()
@@ -330,24 +477,17 @@ def main():
 
     # Forecast Preview section
     st.divider()
-    st.subheader("Forecast Preview")
-
-    # Initialize starting cash in session state
-    if 'starting_cash' not in st.session_state:
-        st.session_state.starting_cash = None
-    if 'starting_cash_month' not in st.session_state:
-        st.session_state.starting_cash_month = None
+    st.subheader("Forecast & Actuals")
 
     forecast_col1, forecast_col2 = st.columns([3, 1])
 
     with forecast_col2:
-        if st.button("Fetch Starting Cash", use_container_width=True):
-            with st.spinner("Connecting to Monarch Money..."):
+        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
+            with st.spinner("Syncing with Monarch Money..."):
                 try:
-                    cash = fetch_starting_cash(selected_month)
-                    st.session_state.starting_cash = cash
-                    st.session_state.starting_cash_month = selected_month
-                    st.success("Fetched!")
+                    monarch_data = sync_with_monarch(selected_month)
+                    st.session_state.monarch_data = monarch_data
+                    st.success("Synced!")
                     st.rerun()
                 except AuthError as e:
                     st.error(str(e))
@@ -355,11 +495,9 @@ def main():
                     st.error(f"Error: {e}\n\nTry running `python budget_forecast.py` first to authenticate.")
 
     with forecast_col1:
-        # Check if we have a valid starting cash for this month
-        if (st.session_state.starting_cash is not None and
-            st.session_state.starting_cash_month == selected_month):
-
-            starting_cash = st.session_state.starting_cash
+        # Check if we have synced data for this month
+        if st.session_state.monarch_data:
+            starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
             expected_end = starting_cash + total_income - total_expenses
 
             # Display forecast calculation
@@ -379,7 +517,7 @@ def main():
                     delta_color="normal" if expected_end >= starting_cash else "inverse",
                 )
         else:
-            st.info("Click 'Fetch Starting Cash' to load your current cash balance from Monarch Money and see the forecast.")
+            st.info("Click 'Sync with Monarch' to load your cash balance and actual spending from Monarch Money.")
 
     # Save and Reset buttons
     st.divider()

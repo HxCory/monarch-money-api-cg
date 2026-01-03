@@ -135,7 +135,7 @@ python debt_payoff.py --use-local-budget      # Use custom_budget.json
 
 **Branch**: `feature/streamlit-budget-editor`
 
-**Goal**: Interactive web UI for editing budget categories with live forecast preview.
+**Goal**: Interactive web UI for editing budget categories with live forecast preview and budget vs actual tracking.
 
 **Usage**:
 ```bash
@@ -147,11 +147,14 @@ streamlit run budget_editor.py
 - [x] Auto-calculated totals
 - [x] Month selector (past 12 months + next 3 months)
 - [x] Per-month budget files in `budgets/` directory
-- [x] Fetch live starting cash from Monarch API
+- [x] **Sync with Monarch** - Fetch starting cash AND actual spending from API
+- [x] **Budget vs Actual** - Actual and Remaining columns shown alongside Planned
+- [x] Remaining column updates reactively when Planned is edited
 - [x] Forecast preview (Starting Cash + Income - Expenses = Expected End)
 - [x] Copy budget from previous month
 - [x] Category group dropdowns
 - [x] Cached API client with nest_asyncio for proper async handling
+- [x] Side-by-side layout: editable columns (data_editor) + read-only columns (dataframe)
 
 **File Storage**:
 - Budgets saved to `budgets/YYYY-MM.json`
@@ -161,7 +164,6 @@ streamlit run budget_editor.py
 
 ### 📋 Future Steps
 1. Multi-month trend analysis
-2. Budget vs actual comparison reports
 
 ## Quick Start
 

@@ -211,7 +211,8 @@ Opens a web browser with an interactive budget editor:
 - Edit income and expense categories in a spreadsheet-like table
 - Auto-calculated totals update as you type
 - Select month from dropdown (supports past 12 months and next 3 months)
-- Fetch live starting cash balance from Monarch Money API
+- **Sync with Monarch** to fetch starting cash AND actual spending from API
+- **Budget vs Actual tracking** - See Actual and Remaining columns alongside Planned amounts
 - See forecast preview: Starting Cash + Income - Expenses = Expected End
 - Save budgets per-month to `budgets/YYYY-MM.json`
 - Copy budgets from previous months
@@ -409,8 +410,8 @@ This is a personal project, but contributions are welcome! If you have ideas for
 - [x] Debt payoff projections (CC and loans with configurable interest rates)
 - [x] Custom budget overrides (local JSON files)
 - [x] Streamlit budget editor (interactive web UI with forecast preview)
+- [x] Budget vs. actual comparisons (Sync with Monarch to see Actual/Remaining)
 - [ ] Multi-month trend analysis
-- [ ] Budget vs. actual comparisons
 
 ## Tech Stack
 
