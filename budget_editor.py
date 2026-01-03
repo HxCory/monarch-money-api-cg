@@ -5,6 +5,7 @@ Usage:
     streamlit run budget_editor.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import asyncio
@@ -21,7 +22,8 @@ from monarch_budgeting.utils import (
     parse_month,
     DEFAULT_CUSTOM_BUDGET_PATH,
 )
-from monarch_budgeting.client import MonarchClient
+from monarchmoney import MonarchMoney
+from monarchmoney.monarchmoney import RequireMFAException
 
 # Allow nested event loops (needed for Streamlit + asyncio)
 nest_asyncio.apply()
@@ -61,42 +63,134 @@ def get_default_budget() -> dict:
     }
 
 
-@st.cache_resource
-def get_monarch_client():
-    """
-    Get a cached MonarchClient instance.
-
-    Uses Streamlit's cache_resource to maintain a single client across reruns.
-    """
-    return MonarchClient()
-
-
-async def _login_client(client: MonarchClient) -> bool:
-    """
-    Attempt to login the client using saved session.
-
-    Returns True if successful, False if auth failed.
-    Does NOT prompt for MFA (can't use input() in Streamlit).
-    """
-    try:
-        # Try saved session first (no credentials needed if session is valid)
-        await client.login(use_saved_session=True, prompt_for_mfa=False)
-        return True
-    except Exception as e:
-        # Check if it's an MFA issue or other auth failure
-        error_str = str(e).lower()
-        if 'mfa' in error_str or 'multi' in error_str or 'factor' in error_str:
-            raise AuthError(
-                "MFA required. Please authenticate first by running:\n"
-                "  python budget_forecast.py\n"
-                "This will save a session that the budget editor can use."
-            )
-        raise AuthError(f"Login failed: {e}")
-
-
 class AuthError(Exception):
     """Authentication error with user-friendly message."""
     pass
+
+
+@st.cache_resource
+def get_monarch_money():
+    """
+    Get a cached MonarchMoney instance.
+
+    Uses Streamlit's cache_resource to maintain a single client across reruns.
+    """
+    return MonarchMoney()
+
+
+async def ensure_authenticated() -> MonarchMoney:
+    """
+    Ensure we have an authenticated MonarchMoney client.
+
+    Uses the same auth logic as CLI tools:
+    1. Try saved session first
+    2. Fall back to credentials from env vars (MONARCH_EMAIL, MONARCH_PASSWORD)
+    3. Use MONARCH_MFA_SECRET for automatic TOTP if MFA is required
+
+    Returns the authenticated MonarchMoney instance.
+    Raises AuthError if authentication fails.
+    """
+    mm = get_monarch_money()
+
+    # Check if already authenticated (has valid token)
+    if mm._token:
+        return mm
+
+    # Try saved session first
+    try:
+        await mm.login(use_saved_session=True)
+        return mm
+    except Exception:
+        pass  # Session doesn't exist or is invalid
+
+    # Get credentials from environment
+    email = os.environ.get('MONARCH_EMAIL')
+    password = os.environ.get('MONARCH_PASSWORD')
+    mfa_secret = os.environ.get('MONARCH_MFA_SECRET')
+
+    if not email or not password:
+        raise AuthError(
+            "No saved session and credentials not found.\n\n"
+            "Please set environment variables:\n"
+            "  export MONARCH_EMAIL='your-email'\n"
+            "  export MONARCH_PASSWORD='your-password'\n"
+            "  export MONARCH_MFA_SECRET='your-totp-secret'  # if MFA enabled"
+        )
+
+    # Try to login with credentials
+    try:
+        await mm.login(
+            email=email,
+            password=password,
+            use_saved_session=False,
+            mfa_secret_key=mfa_secret
+        )
+        return mm
+    except RequireMFAException:
+        if not mfa_secret:
+            raise AuthError(
+                "MFA required but MONARCH_MFA_SECRET not set.\n\n"
+                "Please set the environment variable:\n"
+                "  export MONARCH_MFA_SECRET='your-totp-secret'\n\n"
+                "Or run `python budget_forecast.py` once to save a session."
+            )
+        raise AuthError("MFA authentication failed. Check your MONARCH_MFA_SECRET.")
+    except Exception as e:
+        raise AuthError(f"Login failed: {e}")
+
+
+async def get_budget_data(mm: MonarchMoney, month: str) -> dict:
+    """
+    Get budget data for a specific month using custom GraphQL query.
+
+    Args:
+        mm: Authenticated MonarchMoney instance
+        month: Month in YYYY-MM format (e.g., '2026-01')
+
+    Returns:
+        Dictionary with budget data including monthlyAmountsByCategory and totalsByMonth
+    """
+    from gql import gql
+
+    query = gql('''
+        query GetBudgetData($month: Date!) {
+            budgetData(startMonth: $month, endMonth: $month) {
+                monthlyAmountsByCategory {
+                    category {
+                        id
+                        name
+                        group {
+                            id
+                            name
+                            type
+                        }
+                    }
+                    monthlyAmounts {
+                        month
+                        plannedCashFlowAmount
+                        actualAmount
+                        remainingAmount
+                    }
+                }
+                totalsByMonth {
+                    month
+                    totalIncome {
+                        plannedAmount
+                        actualAmount
+                    }
+                    totalExpenses {
+                        plannedAmount
+                        actualAmount
+                    }
+                }
+            }
+        }
+    ''')
+
+    month_date = f"{month}-01" if len(month) == 7 else month
+    client = mm._get_graphql_client()
+    result = await client.execute_async(query, variable_values={'month': month_date})
+    return result.get('budgetData', {})
 
 
 async def sync_with_monarch_async(month: str) -> dict:
@@ -109,8 +203,8 @@ async def sync_with_monarch_async(month: str) -> dict:
     start_date, _ = parse_month(month)
     month_key = start_date.strftime("%Y-%m")
 
-    client = get_monarch_client()
-    await _login_client(client)
+    # Authenticate
+    mm = await ensure_authenticated()
 
     result = {
         'starting_cash': 0,
@@ -121,9 +215,9 @@ async def sync_with_monarch_async(month: str) -> dict:
     }
 
     # Get starting cash balance
-    snapshots = await client.get_aggregate_snapshots(
-        start_date=start_date,
-        end_date=start_date,
+    snapshots = await mm.get_aggregate_snapshots(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=start_date.strftime('%Y-%m-%d'),
         account_type='depository'
     )
 
@@ -133,16 +227,16 @@ async def sync_with_monarch_async(month: str) -> dict:
     else:
         # Try previous day if no snapshot for start
         prev_day = start_date - timedelta(days=1)
-        snapshots = await client.get_aggregate_snapshots(
-            start_date=prev_day,
-            end_date=prev_day,
+        snapshots = await mm.get_aggregate_snapshots(
+            start_date=prev_day.strftime('%Y-%m-%d'),
+            end_date=prev_day.strftime('%Y-%m-%d'),
             account_type='depository'
         )
         snapshot_list = snapshots.get('aggregateSnapshots', [])
         result['starting_cash'] = snapshot_list[0].get('balance', 0) if snapshot_list else 0
 
     # Get budget data with actuals
-    budget_data = await client.get_budget_data(month_key)
+    budget_data = await get_budget_data(mm, month_key)
 
     # Parse totals
     totals = budget_data.get('totalsByMonth', [])
@@ -300,8 +394,30 @@ def main():
     if 'monarch_data' not in st.session_state:
         st.session_state.monarch_data = None
 
-    # Display current month
-    st.header(f"Budget for {selected_month}")
+    # Display current month header with Sync button
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.header(f"Budget for {selected_month}")
+    with header_col2:
+        st.write("")  # Spacer to align button with header
+        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
+            with st.spinner("Syncing with Monarch Money..."):
+                try:
+                    monarch_data = sync_with_monarch(selected_month)
+                    st.session_state.monarch_data = monarch_data
+                    st.success("Synced!")
+                    st.rerun()
+                except AuthError as e:
+                    st.error(str(e))
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    # Show sync status
+    if st.session_state.monarch_data:
+        starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
+        st.caption(f"Synced with Monarch - Starting Cash: {format_currency(starting_cash)}")
+    else:
+        st.caption("Click 'Sync with Monarch' to load actuals and starting cash balance")
 
     # Create two columns for income and expenses
     col1, col2 = st.columns(2)
@@ -475,49 +591,30 @@ def main():
             delta_color="normal" if surplus >= 0 else "inverse",
         )
 
-    # Forecast Preview section
-    st.divider()
-    st.subheader("Forecast & Actuals")
+    # Forecast Preview section (only show if synced)
+    if st.session_state.monarch_data:
+        st.divider()
+        st.subheader("Forecast")
 
-    forecast_col1, forecast_col2 = st.columns([3, 1])
+        starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
+        expected_end = starting_cash + total_income - total_expenses
 
-    with forecast_col2:
-        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
-            with st.spinner("Syncing with Monarch Money..."):
-                try:
-                    monarch_data = sync_with_monarch(selected_month)
-                    st.session_state.monarch_data = monarch_data
-                    st.success("Synced!")
-                    st.rerun()
-                except AuthError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"Error: {e}\n\nTry running `python budget_forecast.py` first to authenticate.")
+        # Display forecast calculation
+        fc1, fc2, fc3, fc4 = st.columns(4)
 
-    with forecast_col1:
-        # Check if we have synced data for this month
-        if st.session_state.monarch_data:
-            starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
-            expected_end = starting_cash + total_income - total_expenses
-
-            # Display forecast calculation
-            fc1, fc2, fc3, fc4 = st.columns(4)
-
-            with fc1:
-                st.metric("Starting Cash", format_currency(starting_cash))
-            with fc2:
-                st.metric("+ Income", format_currency(total_income))
-            with fc3:
-                st.metric("- Expenses", format_currency(total_expenses))
-            with fc4:
-                st.metric(
-                    "= Expected End",
-                    format_currency(expected_end),
-                    delta=format_currency(expected_end - starting_cash),
-                    delta_color="normal" if expected_end >= starting_cash else "inverse",
-                )
-        else:
-            st.info("Click 'Sync with Monarch' to load your cash balance and actual spending from Monarch Money.")
+        with fc1:
+            st.metric("Starting Cash", format_currency(starting_cash))
+        with fc2:
+            st.metric("+ Income", format_currency(total_income))
+        with fc3:
+            st.metric("- Expenses", format_currency(total_expenses))
+        with fc4:
+            st.metric(
+                "= Expected End",
+                format_currency(expected_end),
+                delta=format_currency(expected_end - starting_cash),
+                delta_color="normal" if expected_end >= starting_cash else "inverse",
+            )
 
     # Save and Reset buttons
     st.divider()
