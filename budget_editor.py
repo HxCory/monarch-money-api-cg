@@ -5,6 +5,7 @@ Usage:
     streamlit run budget_editor.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import asyncio
@@ -21,7 +22,17 @@ from monarch_budgeting.utils import (
     parse_month,
     DEFAULT_CUSTOM_BUDGET_PATH,
 )
-from monarch_budgeting.client import MonarchClient
+from monarch_budgeting.budget_data import parse_categories
+from monarch_budgeting.analyzer import CashBudgetAnalyzer
+from monarchmoney import MonarchMoney
+from monarchmoney.monarchmoney import RequireMFAException, MonarchMoneyEndpoints
+
+# Patch the API endpoint - Monarch Money changed from api.monarchmoney.com to api.monarch.com
+MonarchMoney.BASE_URL = "https://api.monarch.com"
+MonarchMoneyEndpoints.BASE_URL = "https://api.monarch.com"
+
+# Browser-like User-Agent to avoid Cloudflare blocks on new endpoint
+_BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Allow nested event loops (needed for Streamlit + asyncio)
 nest_asyncio.apply()
@@ -61,69 +72,174 @@ def get_default_budget() -> dict:
     }
 
 
-@st.cache_resource
-def get_monarch_client():
-    """
-    Get a cached MonarchClient instance.
-
-    Uses Streamlit's cache_resource to maintain a single client across reruns.
-    """
-    return MonarchClient()
-
-
-async def _login_client(client: MonarchClient) -> bool:
-    """
-    Attempt to login the client using saved session.
-
-    Returns True if successful, False if auth failed.
-    Does NOT prompt for MFA (can't use input() in Streamlit).
-    """
-    try:
-        # Try saved session first (no credentials needed if session is valid)
-        await client.login(use_saved_session=True, prompt_for_mfa=False)
-        return True
-    except Exception as e:
-        # Check if it's an MFA issue or other auth failure
-        error_str = str(e).lower()
-        if 'mfa' in error_str or 'multi' in error_str or 'factor' in error_str:
-            raise AuthError(
-                "MFA required. Please authenticate first by running:\n"
-                "  python budget_forecast.py\n"
-                "This will save a session that the budget editor can use."
-            )
-        raise AuthError(f"Login failed: {e}")
-
-
 class AuthError(Exception):
     """Authentication error with user-friendly message."""
     pass
 
 
-async def sync_with_monarch_async(month: str) -> dict:
+@st.cache_resource
+def get_monarch_money():
     """
-    Sync with Monarch Money API to fetch starting cash and budget actuals.
+    Get a cached MonarchMoney instance.
+
+    Uses Streamlit's cache_resource to maintain a single client across reruns.
+    """
+    mm = MonarchMoney()
+    mm._headers["User-Agent"] = _BROWSER_USER_AGENT
+    return mm
+
+
+async def ensure_authenticated() -> MonarchMoney:
+    """
+    Ensure we have an authenticated MonarchMoney client.
+
+    Uses the same auth logic as CLI tools:
+    1. Try saved session first
+    2. Fall back to credentials from env vars (MONARCH_EMAIL, MONARCH_PASSWORD)
+    3. Use MONARCH_MFA_SECRET for automatic TOTP if MFA is required
+
+    Returns the authenticated MonarchMoney instance.
+    Raises AuthError if authentication fails.
+    """
+    mm = get_monarch_money()
+
+    # Check if already authenticated (has valid token)
+    if mm._token:
+        return mm
+
+    # Try saved session first
+    try:
+        await mm.login(use_saved_session=True)
+        return mm
+    except Exception:
+        pass  # Session doesn't exist or is invalid
+
+    # Get credentials from environment
+    email = os.environ.get('MONARCH_EMAIL')
+    password = os.environ.get('MONARCH_PASSWORD')
+    mfa_secret = os.environ.get('MONARCH_MFA_SECRET')
+
+    if not email or not password:
+        raise AuthError(
+            "No saved session and credentials not found.\n\n"
+            "Please set environment variables:\n"
+            "  export MONARCH_EMAIL='your-email'\n"
+            "  export MONARCH_PASSWORD='your-password'\n"
+            "  export MONARCH_MFA_SECRET='your-totp-secret'  # if MFA enabled"
+        )
+
+    # Try to login with credentials
+    try:
+        await mm.login(
+            email=email,
+            password=password,
+            use_saved_session=False,
+            mfa_secret_key=mfa_secret
+        )
+        return mm
+    except RequireMFAException:
+        if not mfa_secret:
+            raise AuthError(
+                "MFA required but MONARCH_MFA_SECRET not set.\n\n"
+                "Please set the environment variable:\n"
+                "  export MONARCH_MFA_SECRET='your-totp-secret'\n\n"
+                "Or run `python budget_forecast.py` once to save a session."
+            )
+        raise AuthError("MFA authentication failed. Check your MONARCH_MFA_SECRET.")
+    except Exception as e:
+        raise AuthError(f"Login failed: {e}")
+
+
+async def get_budget_data(mm: MonarchMoney, month: str) -> dict:
+    """
+    Get budget data for a specific month using custom GraphQL query.
+
+    Args:
+        mm: Authenticated MonarchMoney instance
+        month: Month in YYYY-MM format (e.g., '2026-01')
 
     Returns:
-        Dict with 'starting_cash', 'income_actuals', 'expense_actuals', 'total_income_actual', 'total_expenses_actual'
+        Dictionary with budget data including monthlyAmountsByCategory and totalsByMonth
     """
-    start_date, _ = parse_month(month)
+    from gql import gql
+
+    query = gql('''
+        query GetBudgetData($month: Date!) {
+            budgetData(startMonth: $month, endMonth: $month) {
+                monthlyAmountsByCategory {
+                    category {
+                        id
+                        name
+                        group {
+                            id
+                            name
+                            type
+                        }
+                    }
+                    monthlyAmounts {
+                        month
+                        plannedCashFlowAmount
+                        actualAmount
+                        remainingAmount
+                    }
+                }
+                totalsByMonth {
+                    month
+                    totalIncome {
+                        plannedAmount
+                        actualAmount
+                    }
+                    totalExpenses {
+                        plannedAmount
+                        actualAmount
+                    }
+                }
+            }
+        }
+    ''')
+
+    month_date = f"{month}-01" if len(month) == 7 else month
+    client = mm._get_graphql_client()
+    result = await client.execute_async(query, variable_values={'month': month_date})
+    return result.get('budgetData', {})
+
+
+async def sync_with_monarch_async(month: str) -> dict:
+    """
+    Sync with Monarch Money API to fetch starting cash, budget actuals, and CC spending.
+
+    Returns:
+        Dict with:
+        - 'starting_cash': Starting cash balance
+        - 'income_actuals': category_name -> actual_amount
+        - 'expense_actuals': category_name -> actual_amount
+        - 'expense_cc_amounts': category_name -> cc_amount (CC portion of spending)
+        - 'total_income_actual': Total income actual
+        - 'total_expenses_actual': Total expenses actual
+        - 'total_cc_spending': Sum of all CC spending
+        - 'cc_payments_actual': Actual payments made to credit cards
+    """
+    start_date, end_date = parse_month(month)
     month_key = start_date.strftime("%Y-%m")
 
-    client = get_monarch_client()
-    await _login_client(client)
+    # Authenticate
+    mm = await ensure_authenticated()
 
     result = {
         'starting_cash': 0,
         'income_actuals': {},  # category_name -> actual_amount
         'expense_actuals': {},  # category_name -> actual_amount
+        'expense_cc_amounts': {},  # category_name -> cc_amount
         'total_income_actual': 0,
         'total_expenses_actual': 0,
+        'total_cc_spending': 0,
+        'cc_payments_actual': 0,
     }
 
     # Get starting cash balance
-    snapshots = await client.get_aggregate_snapshots(
-        start_date=start_date,
-        end_date=start_date,
+    snapshots = await mm.get_aggregate_snapshots(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=start_date.strftime('%Y-%m-%d'),
         account_type='depository'
     )
 
@@ -133,16 +249,16 @@ async def sync_with_monarch_async(month: str) -> dict:
     else:
         # Try previous day if no snapshot for start
         prev_day = start_date - timedelta(days=1)
-        snapshots = await client.get_aggregate_snapshots(
-            start_date=prev_day,
-            end_date=prev_day,
+        snapshots = await mm.get_aggregate_snapshots(
+            start_date=prev_day.strftime('%Y-%m-%d'),
+            end_date=prev_day.strftime('%Y-%m-%d'),
             account_type='depository'
         )
         snapshot_list = snapshots.get('aggregateSnapshots', [])
         result['starting_cash'] = snapshot_list[0].get('balance', 0) if snapshot_list else 0
 
     # Get budget data with actuals
-    budget_data = await client.get_budget_data(month_key)
+    budget_data = await get_budget_data(mm, month_key)
 
     # Parse totals
     totals = budget_data.get('totalsByMonth', [])
@@ -162,6 +278,41 @@ async def sync_with_monarch_async(month: str) -> dict:
             result['income_actuals'][cat_name] = actual
         elif cat_type == 'expense':
             result['expense_actuals'][cat_name] = actual
+
+    # Fetch transactions and accounts to calculate CC spending breakdown
+    accounts_data = await mm.get_accounts()
+    accounts = accounts_data if isinstance(accounts_data, list) else accounts_data.get('accounts', [])
+
+    transactions_response = await mm.get_transactions(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d'),
+        limit=5000  # Get all transactions for the month
+    )
+    # Extract transaction list from response
+    transactions = transactions_response.get('allTransactions', {}).get('results', [])
+
+    # Get categories for the analyzer
+    raw_categories = await mm.get_transaction_categories()
+    categories = parse_categories(raw_categories)
+
+    # Use CashBudgetAnalyzer to calculate CC breakdown
+    analyzer = CashBudgetAnalyzer(transactions, accounts, categories)
+    expense_breakdown = analyzer.get_expense_breakdown(
+        start_date=start_date,
+        end_date=end_date,
+        include_cc_payments=False  # We'll handle CC payments separately
+    )
+
+    # Extract CC amounts per category
+    for _, row in expense_breakdown.iterrows():
+        cat_name = row['category_name']
+        cc_amount = row['cc_amount']
+        result['expense_cc_amounts'][cat_name] = cc_amount
+        result['total_cc_spending'] += cc_amount
+
+    # Get CC payments actual from top-level metrics
+    metrics = analyzer.calculate_top_level_metrics(start_date, end_date)
+    result['cc_payments_actual'] = metrics.get('cc_payments', 0)
 
     return result
 
@@ -232,25 +383,37 @@ def categories_to_df(categories: list, is_income: bool = False) -> pd.DataFrame:
     return df[['name', 'group', 'amount']]
 
 
-def build_actuals_df(edited_df: pd.DataFrame, actuals: dict) -> pd.DataFrame:
+def build_actuals_df(edited_df: pd.DataFrame, actuals: dict, cc_amounts: dict = None) -> pd.DataFrame:
     """
-    Build a read-only DataFrame showing actual vs remaining.
+    Build a read-only DataFrame showing actual, CC, and remaining.
 
     Args:
         edited_df: The edited DataFrame from data_editor (has current planned values)
         actuals: Dict mapping category names to actual amounts
+        cc_amounts: Dict mapping category names to CC amounts (optional, for expenses)
 
     Returns:
-        DataFrame with Actual, Remaining columns (to display alongside editor)
+        DataFrame with Actual, CC (if provided), Remaining columns
     """
     if edited_df.empty:
+        if cc_amounts is not None:
+            return pd.DataFrame(columns=['Actual', 'CC', 'Remaining'])
         return pd.DataFrame(columns=['Actual', 'Remaining'])
 
     actual_values = edited_df['name'].apply(lambda x: float(actuals.get(x, 0.0)))
-    result = pd.DataFrame({
-        'Actual': actual_values,
-        'Remaining': edited_df['amount'] - actual_values,
-    })
+
+    if cc_amounts is not None:
+        cc_values = edited_df['name'].apply(lambda x: float(cc_amounts.get(x, 0.0)))
+        result = pd.DataFrame({
+            'Actual': actual_values,
+            'CC': cc_values,
+            'Remaining': edited_df['amount'] - actual_values,
+        })
+    else:
+        result = pd.DataFrame({
+            'Actual': actual_values,
+            'Remaining': edited_df['amount'] - actual_values,
+        })
 
     return result
 
@@ -300,8 +463,30 @@ def main():
     if 'monarch_data' not in st.session_state:
         st.session_state.monarch_data = None
 
-    # Display current month
-    st.header(f"Budget for {selected_month}")
+    # Display current month header with Sync button
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.header(f"Budget for {selected_month}")
+    with header_col2:
+        st.write("")  # Spacer to align button with header
+        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
+            with st.spinner("Syncing with Monarch Money..."):
+                try:
+                    monarch_data = sync_with_monarch(selected_month)
+                    st.session_state.monarch_data = monarch_data
+                    st.success("Synced!")
+                    st.rerun()
+                except AuthError as e:
+                    st.error(str(e))
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    # Show sync status
+    if st.session_state.monarch_data:
+        starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
+        st.caption(f"Synced with Monarch - Starting Cash: {format_currency(starting_cash)}")
+    else:
+        st.caption("Click 'Sync with Monarch' to load actuals and starting cash balance")
 
     # Create two columns for income and expenses
     col1, col2 = st.columns(2)
@@ -309,9 +494,11 @@ def main():
     # Get actuals if synced
     income_actuals = None
     expense_actuals = None
+    expense_cc_amounts = None
     if st.session_state.monarch_data:
         income_actuals = st.session_state.monarch_data.get('income_actuals', {})
         expense_actuals = st.session_state.monarch_data.get('expense_actuals', {})
+        expense_cc_amounts = st.session_state.monarch_data.get('expense_cc_amounts', {})
 
     with col1:
         st.subheader("Income")
@@ -433,11 +620,12 @@ def main():
         # Show actuals alongside editor if synced
         if expense_actuals is not None and actuals_col is not None:
             with actuals_col:
-                actuals_df = build_actuals_df(edited_expenses, expense_actuals)
+                actuals_df = build_actuals_df(edited_expenses, expense_actuals, expense_cc_amounts)
                 st.dataframe(
                     actuals_df,
                     column_config={
                         "Actual": st.column_config.NumberColumn(format="$%.2f"),
+                        "CC": st.column_config.NumberColumn(format="$%.2f"),
                         "Remaining": st.column_config.NumberColumn(format="$%.2f"),
                     },
                     use_container_width=True,
@@ -458,7 +646,12 @@ def main():
     st.divider()
     st.subheader("Summary")
 
-    summary_col1, summary_col2, summary_col3 = st.columns(3)
+    # Show 4 columns if synced (includes CC Debt Change), otherwise 3
+    if st.session_state.monarch_data:
+        summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+    else:
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        summary_col4 = None
 
     with summary_col1:
         st.metric("Total Income", format_currency(total_income))
@@ -472,52 +665,47 @@ def main():
             "Monthly Surplus",
             format_currency(surplus),
             delta=format_currency(surplus) if surplus != 0 else None,
-            delta_color="normal" if surplus >= 0 else "inverse",
+            delta_color="normal",
         )
 
-    # Forecast Preview section
-    st.divider()
-    st.subheader("Forecast & Actuals")
+    # CC Debt Change: Total CC spending minus CC payments
+    # Positive = debt increased, Negative = debt decreased (paid down)
+    if summary_col4 is not None:
+        with summary_col4:
+            total_cc_spending = st.session_state.monarch_data.get('total_cc_spending', 0)
+            cc_payments_actual = st.session_state.monarch_data.get('cc_payments_actual', 0)
+            cc_debt_change = total_cc_spending - cc_payments_actual
+            st.metric(
+                "CC Debt Change",
+                format_currency(cc_debt_change),
+                delta=format_currency(cc_debt_change) if cc_debt_change != 0 else None,
+                delta_color="inverse",  # Red when debt increases (positive), green when decreases
+            )
 
-    forecast_col1, forecast_col2 = st.columns([3, 1])
+    # Forecast Preview section (only show if synced)
+    if st.session_state.monarch_data:
+        st.divider()
+        st.subheader("Forecast")
 
-    with forecast_col2:
-        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
-            with st.spinner("Syncing with Monarch Money..."):
-                try:
-                    monarch_data = sync_with_monarch(selected_month)
-                    st.session_state.monarch_data = monarch_data
-                    st.success("Synced!")
-                    st.rerun()
-                except AuthError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"Error: {e}\n\nTry running `python budget_forecast.py` first to authenticate.")
+        starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
+        expected_end = starting_cash + total_income - total_expenses
 
-    with forecast_col1:
-        # Check if we have synced data for this month
-        if st.session_state.monarch_data:
-            starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
-            expected_end = starting_cash + total_income - total_expenses
+        # Display forecast calculation
+        fc1, fc2, fc3, fc4 = st.columns(4)
 
-            # Display forecast calculation
-            fc1, fc2, fc3, fc4 = st.columns(4)
-
-            with fc1:
-                st.metric("Starting Cash", format_currency(starting_cash))
-            with fc2:
-                st.metric("+ Income", format_currency(total_income))
-            with fc3:
-                st.metric("- Expenses", format_currency(total_expenses))
-            with fc4:
-                st.metric(
-                    "= Expected End",
-                    format_currency(expected_end),
-                    delta=format_currency(expected_end - starting_cash),
-                    delta_color="normal" if expected_end >= starting_cash else "inverse",
-                )
-        else:
-            st.info("Click 'Sync with Monarch' to load your cash balance and actual spending from Monarch Money.")
+        with fc1:
+            st.metric("Starting Cash", format_currency(starting_cash))
+        with fc2:
+            st.metric("+ Income", format_currency(total_income))
+        with fc3:
+            st.metric("- Expenses", format_currency(total_expenses))
+        with fc4:
+            st.metric(
+                "= Expected End",
+                format_currency(expected_end),
+                delta=format_currency(expected_end - starting_cash),
+                delta_color="normal",
+            )
 
     # Save and Reset buttons
     st.divider()
