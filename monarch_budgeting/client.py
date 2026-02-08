@@ -9,7 +9,14 @@ import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from monarchmoney import MonarchMoney
-from monarchmoney.monarchmoney import RequireMFAException
+from monarchmoney.monarchmoney import RequireMFAException, MonarchMoneyEndpoints
+
+# Patch the API endpoint - Monarch Money changed from api.monarchmoney.com to api.monarch.com
+MonarchMoney.BASE_URL = "https://api.monarch.com"
+MonarchMoneyEndpoints.BASE_URL = "https://api.monarch.com"
+
+# Browser-like User-Agent to avoid Cloudflare blocks on new endpoint
+_BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 class MonarchClient:
@@ -18,6 +25,8 @@ class MonarchClient:
     def __init__(self):
         """Initialize the Monarch Money client."""
         self.mm = MonarchMoney()
+        # Patch User-Agent to avoid Cloudflare blocks on new API endpoint
+        self.mm._headers["User-Agent"] = _BROWSER_USER_AGENT
         self._authenticated = False
         self._email = None
         self._password = None
@@ -89,6 +98,7 @@ class MonarchClient:
             print("Session expired, re-authenticating...")
             # Create new client to clear stale session
             self.mm = MonarchMoney()
+            self.mm._headers["User-Agent"] = _BROWSER_USER_AGENT
             await self._do_login(self._email, self._password,
                                use_saved_session=False, mfa_secret_key=self._mfa_secret,
                                prompt_for_mfa=True)

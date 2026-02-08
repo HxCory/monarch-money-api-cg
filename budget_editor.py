@@ -22,8 +22,17 @@ from monarch_budgeting.utils import (
     parse_month,
     DEFAULT_CUSTOM_BUDGET_PATH,
 )
+from monarch_budgeting.budget_data import parse_categories
+from monarch_budgeting.analyzer import CashBudgetAnalyzer
 from monarchmoney import MonarchMoney
-from monarchmoney.monarchmoney import RequireMFAException
+from monarchmoney.monarchmoney import RequireMFAException, MonarchMoneyEndpoints
+
+# Patch the API endpoint - Monarch Money changed from api.monarchmoney.com to api.monarch.com
+MonarchMoney.BASE_URL = "https://api.monarch.com"
+MonarchMoneyEndpoints.BASE_URL = "https://api.monarch.com"
+
+# Browser-like User-Agent to avoid Cloudflare blocks on new endpoint
+_BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Allow nested event loops (needed for Streamlit + asyncio)
 nest_asyncio.apply()
@@ -75,7 +84,9 @@ def get_monarch_money():
 
     Uses Streamlit's cache_resource to maintain a single client across reruns.
     """
-    return MonarchMoney()
+    mm = MonarchMoney()
+    mm._headers["User-Agent"] = _BROWSER_USER_AGENT
+    return mm
 
 
 async def ensure_authenticated() -> MonarchMoney:
@@ -195,12 +206,20 @@ async def get_budget_data(mm: MonarchMoney, month: str) -> dict:
 
 async def sync_with_monarch_async(month: str) -> dict:
     """
-    Sync with Monarch Money API to fetch starting cash and budget actuals.
+    Sync with Monarch Money API to fetch starting cash, budget actuals, and CC spending.
 
     Returns:
-        Dict with 'starting_cash', 'income_actuals', 'expense_actuals', 'total_income_actual', 'total_expenses_actual'
+        Dict with:
+        - 'starting_cash': Starting cash balance
+        - 'income_actuals': category_name -> actual_amount
+        - 'expense_actuals': category_name -> actual_amount
+        - 'expense_cc_amounts': category_name -> cc_amount (CC portion of spending)
+        - 'total_income_actual': Total income actual
+        - 'total_expenses_actual': Total expenses actual
+        - 'total_cc_spending': Sum of all CC spending
+        - 'cc_payments_actual': Actual payments made to credit cards
     """
-    start_date, _ = parse_month(month)
+    start_date, end_date = parse_month(month)
     month_key = start_date.strftime("%Y-%m")
 
     # Authenticate
@@ -210,8 +229,11 @@ async def sync_with_monarch_async(month: str) -> dict:
         'starting_cash': 0,
         'income_actuals': {},  # category_name -> actual_amount
         'expense_actuals': {},  # category_name -> actual_amount
+        'expense_cc_amounts': {},  # category_name -> cc_amount
         'total_income_actual': 0,
         'total_expenses_actual': 0,
+        'total_cc_spending': 0,
+        'cc_payments_actual': 0,
     }
 
     # Get starting cash balance
@@ -256,6 +278,41 @@ async def sync_with_monarch_async(month: str) -> dict:
             result['income_actuals'][cat_name] = actual
         elif cat_type == 'expense':
             result['expense_actuals'][cat_name] = actual
+
+    # Fetch transactions and accounts to calculate CC spending breakdown
+    accounts_data = await mm.get_accounts()
+    accounts = accounts_data if isinstance(accounts_data, list) else accounts_data.get('accounts', [])
+
+    transactions_response = await mm.get_transactions(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d'),
+        limit=5000  # Get all transactions for the month
+    )
+    # Extract transaction list from response
+    transactions = transactions_response.get('allTransactions', {}).get('results', [])
+
+    # Get categories for the analyzer
+    raw_categories = await mm.get_transaction_categories()
+    categories = parse_categories(raw_categories)
+
+    # Use CashBudgetAnalyzer to calculate CC breakdown
+    analyzer = CashBudgetAnalyzer(transactions, accounts, categories)
+    expense_breakdown = analyzer.get_expense_breakdown(
+        start_date=start_date,
+        end_date=end_date,
+        include_cc_payments=False  # We'll handle CC payments separately
+    )
+
+    # Extract CC amounts per category
+    for _, row in expense_breakdown.iterrows():
+        cat_name = row['category_name']
+        cc_amount = row['cc_amount']
+        result['expense_cc_amounts'][cat_name] = cc_amount
+        result['total_cc_spending'] += cc_amount
+
+    # Get CC payments actual from top-level metrics
+    metrics = analyzer.calculate_top_level_metrics(start_date, end_date)
+    result['cc_payments_actual'] = metrics.get('cc_payments', 0)
 
     return result
 
@@ -326,25 +383,37 @@ def categories_to_df(categories: list, is_income: bool = False) -> pd.DataFrame:
     return df[['name', 'group', 'amount']]
 
 
-def build_actuals_df(edited_df: pd.DataFrame, actuals: dict) -> pd.DataFrame:
+def build_actuals_df(edited_df: pd.DataFrame, actuals: dict, cc_amounts: dict = None) -> pd.DataFrame:
     """
-    Build a read-only DataFrame showing actual vs remaining.
+    Build a read-only DataFrame showing actual, CC, and remaining.
 
     Args:
         edited_df: The edited DataFrame from data_editor (has current planned values)
         actuals: Dict mapping category names to actual amounts
+        cc_amounts: Dict mapping category names to CC amounts (optional, for expenses)
 
     Returns:
-        DataFrame with Actual, Remaining columns (to display alongside editor)
+        DataFrame with Actual, CC (if provided), Remaining columns
     """
     if edited_df.empty:
+        if cc_amounts is not None:
+            return pd.DataFrame(columns=['Actual', 'CC', 'Remaining'])
         return pd.DataFrame(columns=['Actual', 'Remaining'])
 
     actual_values = edited_df['name'].apply(lambda x: float(actuals.get(x, 0.0)))
-    result = pd.DataFrame({
-        'Actual': actual_values,
-        'Remaining': edited_df['amount'] - actual_values,
-    })
+
+    if cc_amounts is not None:
+        cc_values = edited_df['name'].apply(lambda x: float(cc_amounts.get(x, 0.0)))
+        result = pd.DataFrame({
+            'Actual': actual_values,
+            'CC': cc_values,
+            'Remaining': edited_df['amount'] - actual_values,
+        })
+    else:
+        result = pd.DataFrame({
+            'Actual': actual_values,
+            'Remaining': edited_df['amount'] - actual_values,
+        })
 
     return result
 
@@ -425,9 +494,11 @@ def main():
     # Get actuals if synced
     income_actuals = None
     expense_actuals = None
+    expense_cc_amounts = None
     if st.session_state.monarch_data:
         income_actuals = st.session_state.monarch_data.get('income_actuals', {})
         expense_actuals = st.session_state.monarch_data.get('expense_actuals', {})
+        expense_cc_amounts = st.session_state.monarch_data.get('expense_cc_amounts', {})
 
     with col1:
         st.subheader("Income")
@@ -549,11 +620,12 @@ def main():
         # Show actuals alongside editor if synced
         if expense_actuals is not None and actuals_col is not None:
             with actuals_col:
-                actuals_df = build_actuals_df(edited_expenses, expense_actuals)
+                actuals_df = build_actuals_df(edited_expenses, expense_actuals, expense_cc_amounts)
                 st.dataframe(
                     actuals_df,
                     column_config={
                         "Actual": st.column_config.NumberColumn(format="$%.2f"),
+                        "CC": st.column_config.NumberColumn(format="$%.2f"),
                         "Remaining": st.column_config.NumberColumn(format="$%.2f"),
                     },
                     use_container_width=True,
@@ -574,7 +646,12 @@ def main():
     st.divider()
     st.subheader("Summary")
 
-    summary_col1, summary_col2, summary_col3 = st.columns(3)
+    # Show 4 columns if synced (includes CC Debt Change), otherwise 3
+    if st.session_state.monarch_data:
+        summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+    else:
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        summary_col4 = None
 
     with summary_col1:
         st.metric("Total Income", format_currency(total_income))
@@ -588,8 +665,22 @@ def main():
             "Monthly Surplus",
             format_currency(surplus),
             delta=format_currency(surplus) if surplus != 0 else None,
-            delta_color="normal" if surplus >= 0 else "inverse",
+            delta_color="normal",
         )
+
+    # CC Debt Change: Total CC spending minus CC payments
+    # Positive = debt increased, Negative = debt decreased (paid down)
+    if summary_col4 is not None:
+        with summary_col4:
+            total_cc_spending = st.session_state.monarch_data.get('total_cc_spending', 0)
+            cc_payments_actual = st.session_state.monarch_data.get('cc_payments_actual', 0)
+            cc_debt_change = total_cc_spending - cc_payments_actual
+            st.metric(
+                "CC Debt Change",
+                format_currency(cc_debt_change),
+                delta=format_currency(cc_debt_change) if cc_debt_change != 0 else None,
+                delta_color="inverse",  # Red when debt increases (positive), green when decreases
+            )
 
     # Forecast Preview section (only show if synced)
     if st.session_state.monarch_data:
@@ -613,7 +704,7 @@ def main():
                 "= Expected End",
                 format_currency(expected_end),
                 delta=format_currency(expected_end - starting_cash),
-                delta_color="normal" if expected_end >= starting_cash else "inverse",
+                delta_color="normal",
             )
 
     # Save and Reset buttons
