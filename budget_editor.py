@@ -204,9 +204,13 @@ async def get_budget_data(mm: MonarchMoney, month: str) -> dict:
     return result.get('budgetData', {})
 
 
-async def sync_with_monarch_async(month: str) -> dict:
+async def sync_with_monarch_async(month: str, include_planned: bool = False) -> dict:
     """
     Sync with Monarch Money API to fetch starting cash, budget actuals, and CC spending.
+
+    Args:
+        month: Month in YYYY-MM format
+        include_planned: If True, also fetch planned budget values from Monarch
 
     Returns:
         Dict with:
@@ -218,6 +222,8 @@ async def sync_with_monarch_async(month: str) -> dict:
         - 'total_expenses_actual': Total expenses actual
         - 'total_cc_spending': Sum of all CC spending
         - 'cc_payments_actual': Actual payments made to credit cards
+        - 'income_planned': category_name -> {name, group, amount} (if include_planned)
+        - 'expense_planned': category_name -> {name, group, amount} (if include_planned)
     """
     start_date, end_date = parse_month(month)
     month_key = start_date.strftime("%Y-%m")
@@ -234,6 +240,8 @@ async def sync_with_monarch_async(month: str) -> dict:
         'total_expenses_actual': 0,
         'total_cc_spending': 0,
         'cc_payments_actual': 0,
+        'income_planned': {},  # category_name -> {name, group, amount}
+        'expense_planned': {},  # category_name -> {name, group, amount}
     }
 
     # Get starting cash balance
@@ -266,18 +274,33 @@ async def sync_with_monarch_async(month: str) -> dict:
         result['total_income_actual'] = totals[0].get('totalIncome', {}).get('actualAmount', 0)
         result['total_expenses_actual'] = totals[0].get('totalExpenses', {}).get('actualAmount', 0)
 
-    # Parse category actuals
+    # Parse category actuals and planned values
     for cat_data in budget_data.get('monthlyAmountsByCategory', []):
         category = cat_data.get('category', {})
         cat_name = category.get('name', 'Unknown')
-        cat_type = category.get('group', {}).get('type', 'expense')
+        cat_group = category.get('group', {})
+        cat_type = cat_group.get('type', 'expense')
+        cat_group_name = cat_group.get('name', 'Other')
         amounts = cat_data.get('monthlyAmounts', [{}])[0]
         actual = amounts.get('actualAmount', 0)
+        planned = amounts.get('plannedCashFlowAmount', 0)
 
         if cat_type == 'income':
             result['income_actuals'][cat_name] = actual
+            if include_planned and planned != 0:
+                result['income_planned'][cat_name] = {
+                    'name': cat_name,
+                    'group': cat_group_name,
+                    'amount': planned
+                }
         elif cat_type == 'expense':
             result['expense_actuals'][cat_name] = actual
+            if include_planned and planned != 0:
+                result['expense_planned'][cat_name] = {
+                    'name': cat_name,
+                    'group': cat_group_name,
+                    'amount': planned
+                }
 
     # Fetch transactions and accounts to calculate CC spending breakdown
     accounts_data = await mm.get_accounts()
@@ -317,10 +340,10 @@ async def sync_with_monarch_async(month: str) -> dict:
     return result
 
 
-def sync_with_monarch(month: str) -> dict:
+def sync_with_monarch(month: str, include_planned: bool = False) -> dict:
     """Synchronous wrapper to sync with Monarch."""
     loop = asyncio.get_event_loop()
-    return loop.run_until_complete(sync_with_monarch_async(month))
+    return loop.run_until_complete(sync_with_monarch_async(month, include_planned))
 
 
 def load_initial_budget(month: str) -> dict:
@@ -463,30 +486,89 @@ def main():
     if 'monarch_data' not in st.session_state:
         st.session_state.monarch_data = None
 
-    # Display current month header with Sync button
-    header_col1, header_col2 = st.columns([3, 1])
+    # Display current month header with Sync button and options
+    header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
     with header_col1:
         st.header(f"Budget for {selected_month}")
     with header_col2:
-        st.write("")  # Spacer to align button with header
-        if st.button("Sync with Monarch", use_container_width=True, type="primary"):
-            with st.spinner("Syncing with Monarch Money..."):
-                try:
-                    monarch_data = sync_with_monarch(selected_month)
-                    st.session_state.monarch_data = monarch_data
-                    st.success("Synced!")
+        sync_options = [
+            "Sync Actuals Only",
+            "Sync with Planned",
+            "Load Saved Budget",
+        ]
+        sync_mode = st.selectbox(
+            "Sync Mode",
+            sync_options,
+            label_visibility="collapsed",
+            key="sync_mode"
+        )
+    with header_col3:
+        if st.button("Sync", use_container_width=True, type="primary"):
+            if sync_mode == "Load Saved Budget":
+                # Load from saved local budget file
+                saved_budget = load_month_budget(selected_month)
+                if saved_budget:
+                    st.session_state.budget = saved_budget
+                    st.session_state.monarch_data = None  # Clear monarch data
+                    st.success("Loaded saved budget!")
                     st.rerun()
-                except AuthError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                else:
+                    st.warning("No saved budget found for this month")
+            else:
+                # Sync with Monarch
+                include_planned = (sync_mode == "Sync with Planned")
+                with st.spinner("Syncing with Monarch Money..."):
+                    try:
+                        monarch_data = sync_with_monarch(selected_month, include_planned)
+                        st.session_state.monarch_data = monarch_data
+
+                        # If syncing with planned, update the budget categories
+                        if include_planned:
+                            income_planned = monarch_data.get('income_planned', {})
+                            expense_planned = monarch_data.get('expense_planned', {})
+
+                            if income_planned or expense_planned:
+                                # Build expense categories list
+                                expense_categories = list(expense_planned.values())
+
+                                # Always ensure Credit Card Payments category exists
+                                cc_payments_exists = any(
+                                    c['name'] == 'Credit Card Payments'
+                                    for c in expense_categories
+                                )
+                                if not cc_payments_exists:
+                                    # Add CC Payments with 0 amount (user can edit)
+                                    expense_categories.append({
+                                        'name': 'Credit Card Payments',
+                                        'group': 'Financial',
+                                        'amount': 0
+                                    })
+
+                                # Build new budget from Monarch planned values
+                                new_budget = {
+                                    'income_categories': list(income_planned.values()),
+                                    'expense_categories': expense_categories,
+                                    'total_income': sum(c['amount'] for c in income_planned.values()),
+                                    'total_expenses': sum(c['amount'] for c in expense_categories),
+                                }
+                                st.session_state.budget = new_budget
+                                st.success("Synced with planned values from Monarch!")
+                            else:
+                                st.warning("No planned values found in Monarch for this month")
+                        else:
+                            st.success("Synced!")
+                        st.rerun()
+                    except AuthError as e:
+                        st.error(str(e))
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
     # Show sync status
     if st.session_state.monarch_data:
         starting_cash = st.session_state.monarch_data.get('starting_cash', 0)
         st.caption(f"Synced with Monarch - Starting Cash: {format_currency(starting_cash)}")
     else:
-        st.caption("Click 'Sync with Monarch' to load actuals and starting cash balance")
+        st.caption("Select sync mode and click 'Sync' to load data")
 
     # Create two columns for income and expenses
     col1, col2 = st.columns(2)
