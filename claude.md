@@ -25,7 +25,7 @@ monarch-money-api-cg/
 │   └── main.py                # Main CLI entry point
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration
-├── example.py                # Example usage script
+├── cc_analysis.py            # Credit card analysis script
 └── README.md                 # Project documentation
 ```
 
@@ -188,7 +188,7 @@ Alternatively, you can use the monarchmoney library's interactive login to save 
 
 ### Usage
 ```bash
-python example.py
+python cc_analysis.py
 ```
 
 ## User Preferences

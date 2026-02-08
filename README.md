@@ -154,7 +154,7 @@ This will:
 **Option 2: Run with your real Monarch Money data**:
 
 ```bash
-python example.py
+python cc_analysis.py
 ```
 
 This will:
@@ -162,6 +162,7 @@ This will:
 2. Fetch your accounts and 6 months of transactions
 3. Analyze your credit card debt
 4. Display a summary report
+5. Generate visualizations in `output/analysis_<timestamp>/`
 5. Generate time series visualizations in `output/analysis_YYYYMMDD_HHMMSS/`
 
 **Option 3: Cash-Based Budget Analysis**:
@@ -283,7 +284,7 @@ monarch-money-api-cg/
 ├── debt_payoff.py            # Debt payoff projections CLI
 ├── debt_config.example.json  # Example config for debt payoff
 ├── custom_budget.example.json # Example custom budget override
-├── example.py                # Credit card analysis example
+├── cc_analysis.py            # Credit card analysis (6-month trends)
 ├── demo_plot.py              # Demo with test data (no auth required)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml            # Modern Python project configuration

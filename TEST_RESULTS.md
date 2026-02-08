@@ -117,7 +117,7 @@ When back at your computer:
 
 3. **Run the analysis**:
    ```bash
-   python example.py
+   python cc_analysis.py
    ```
 
 ## Known Limitations
